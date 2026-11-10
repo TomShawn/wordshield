@@ -39,7 +39,7 @@ The packaged application is a complete `WordShield.app`. It includes Python, Tki
 
 Double-click `WordShield.app` in Finder. You may copy the entire application bundle to `/Applications`, but keep the bundle intact.
 
-Use the **语言 / Language** selector in the upper-right corner to switch between Chinese and English. The switch immediately updates tabs, buttons, preview headings, structural findings, dialogs, status messages, and restoration results. It applies only to the current session and creates no preference or cache file in the project or application directory.
+The application starts in English. Use the **语言 / Language** selector in the upper-right corner to switch between English and Chinese. The switch immediately updates tabs, buttons, preview headings, structural findings, dialogs, status messages, and restoration results. It applies only to the current session and creates no preference or cache file in the project or application directory.
 
 Preview selection, entity groups, retained-text decisions, and confirmations persist when switching languages. Native macOS dialog buttons and system menus follow the operating system's language settings.
 

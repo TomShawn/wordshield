@@ -25,7 +25,7 @@ class App:
         self.last_output: Path | None = None
         self.last_restore_report: dict | None = None
         self.restore_issues: list = []
-        self.language = "zh"
+        self.language = "en"
         self.localized_widgets: list[tuple[tk.Widget, str]] = []
         self.buttons: list[ttk.Button] = []
         self.status_key = "status_choose"
@@ -44,7 +44,7 @@ class App:
         heading.pack(fill="x")
         self.title_label = ttk.Label(heading, style="Title.TLabel")
         self.title_label.pack(side="left")
-        self.language_choice = tk.StringVar(value="中文")
+        self.language_choice = tk.StringVar(value="English")
         self.language_box = ttk.Combobox(
             heading, textvariable=self.language_choice,
             values=("中文", "English"), state="readonly", width=10,

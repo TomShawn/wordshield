@@ -32,6 +32,13 @@ def test_gui_redact_and_restore_normal_entry(tmp_path, monkeypatch):
         assert not app.busy
         assert not any(m[0] == "ERROR" for m in messages)
     try:
+        assert app.language == 'en'
+        assert app.language_choice.get() == 'English'
+        assert app.tabs.tab(app.redaction_frame, 'text') == 'Redact Word'
+        assert app.status.get() == 'Choose a DOCX file to begin.'
+        app.language_choice.set('中文')
+        app.language_box.event_generate('<<ComboboxSelected>>')
+        root.update()
         app.choose_source()
         settle()
         assert len(app.tree.get_children()) == 1
