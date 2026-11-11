@@ -182,3 +182,13 @@ Word 另存时会在表格后补一个空段落，并补上脚注和尾注分隔
 发现并修复一个问题。Word 保存时总会把 `【`、`SECRET_001`、`】` 存成三个独立的 run。原先回填文字放进第一个 run，沿用的是括号 `【` 的格式，所以用户双击占位符（Word 只选中 `SECRET_001`）加粗后，回填出来的原文不是粗体。现在改为放进覆盖字符最多的 run，并列时仍取第一个。新增回归测试 `test_restore_uses_format_of_run_covering_most_of_placeholder`，不修复时该测试失败。
 
 同一占位符内的混合格式仍不能逐字恢复。例如后半段改为斜体时，回填原文整体沿用覆盖字符最多的那部分格式。
+
+## Verify 0.2.3 restoration reports
+
+The GUI now invalidates the displayed restoration report when either input field is written or a new inspection begins. This covers file pickers, typed paths, empty inputs, same-input retries, cancelled dialogs and failed attempts. Background inspection and export callbacks compare their captured inputs with the current fields before displaying a result. Switching languages keeps a pending report pending. The latest-output button continues to identify the most recently generated document.
+
+The new lifecycle regression sequence failed against 0.2.2 because selecting a file retained the previous successful report. After the fix, the complete suite passed with 161 tests in 42.17 seconds in the existing Apple Silicon development environment. The shared GUI test session now also covers every background exception category, an actual wrong-password failure, successful retry, changed inputs during inspection and export, and English/Chinese report refresh.
+
+The separate universal2 build environment uses official Python 3.12.3, Tk 8.6, python-docx 1.2.0, lxml 6.1.3, cryptography 48.0.1, cffi 2.1.1 and PyInstaller 6.22.3. All 161 tests passed in that environment in 62.22 seconds on Apple Silicon. The official Python installer was signature-verified and extracted into the external development directory, with framework references relocated there. Dependencies and all generated artifacts stay outside the source checkout.
+
+The preceding 0.2.2 release audit on this Mac passed 32 Microsoft Word 16.114.4 acceptance checks and opened actual packaged-app redacted and restored output. The document-processing engine is unchanged in 0.2.3. Native execution on a physical Intel Mac for 0.2.3, broader macOS-version validation, Developer ID signing, notarization and the complete browser-downloaded first-launch flow remain outstanding.

@@ -6,7 +6,7 @@ The user marks sensitive text manually in Word with the yellow **Text Highlight 
 
 WordShield does not attempt to discover sensitive entities automatically. The person reviewing the document remains responsible for marking and checking all confidential content.
 
-Current version: **0.2.2**
+Current version: **0.2.3**
 
 ## Key properties
 
@@ -43,11 +43,11 @@ The application starts in English. Use the **语言 / Language** selector in the
 
 Preview selection, entity groups, retained-text decisions, and confirmations persist when switching languages. Native macOS dialog buttons and system menus follow the operating system's language settings.
 
-Release archives are named `WordShield-<version>-macOS-<architecture>.zip`. A `universal2` archive runs natively on both Apple Silicon and Intel Macs. The application requires macOS 11 or later. It has been accepted on macOS 27.0 (Apple Silicon, version 0.2.1) and macOS 15.0.1 (Intel, version 0.2.2); test other macOS versions with fictional material first.
+Release archives are named `WordShield-<version>-macOS-<architecture>.zip`. A `universal2` archive runs natively on both Apple Silicon and Intel Macs. The application targets macOS 11 or later. Version 0.2.2 passed acceptance on macOS 27.0 (Apple Silicon) and macOS 15.0.1 (Intel). Test other macOS versions with fictional material first.
 
 The application uses an ad-hoc signature only. It is not signed with an Apple Developer ID and is not notarized, so macOS blocks a downloaded copy on first launch:
 
-1. Verify the archive against the published SHA-256 checksum, for example `shasum -a 256 -c WordShield-0.2.2-macOS-universal2.zip.sha256`.
+1. Verify the archive against the published SHA-256 checksum, for example `shasum -a 256 -c WordShield-0.2.3-macOS-universal2.zip.sha256`.
 2. Extract the archive and move `WordShield.app` to `/Applications`.
 3. Double-click the application. When macOS reports that it cannot verify the developer, close the message.
 4. Open **System Settings › Privacy & Security**, find the message about WordShield, and click **Open Anyway**.
@@ -366,12 +366,12 @@ The current suite contains 161 automated tests covering highlight extraction, cr
 
 The latest verified build and startup check confirmed:
 
-- 133 tests passed
+- 161 tests passed
 - The supported test workflow did not add or modify repository files
 - No source file was added, removed, or modified by those supported workflows
 - No file inside the packaged application changed during standalone startup
 
-The English interface has also been checked after a real mouse selection on an unlocked Mac. A restoration-page layout issue found during that review was fixed so the button for opening the restored document remains visible. Layout tests now require every control on the active page to be displayed at both supported window sizes.
+The English interface has also been checked after a real mouse selection on an unlocked Mac. A restoration-page layout issue found during that review was fixed so the button for opening the restored document remains visible. Layout tests now require every control on the active page to be displayed at both supported window sizes. Version 0.2.3 clears the restoration report when either input changes or a new inspection starts. Failed or cancelled attempts leave the report pending. Results from a background task are displayed only when its inputs still match the current fields. Regression checks cover file pickers, typed paths, same-input retries, failures, cancellation, late callbacks and language switching.
 
 Fictional DOCX fixtures have also been rendered locally for layout inspection. Microsoft Word 16.102.3 on macOS 15.0.1 opened all 12 fictional fixtures, including redacted and restored output. After Word saved them again, highlights were still detected identically and restoration completed with matching text. Word only adds empty paragraphs after tables and footnote/endnote separators when saving, which does not affect detection or restoration. After real edits in Word, restoration kept the inserted text, bold, font, and color, reported deleted and duplicated placeholders, and required risk confirmation for tracked changes. Apple Developer ID signing, notarization, and broader macOS-version validation remain outstanding.
 

@@ -196,6 +196,8 @@ class App:
         self.button(frame, "inspect_restore", self.restore).pack(anchor="e", pady=14)
         self.restore_report = tk.Text(frame, wrap="word", font=("PingFang SC", 12), height=17)
         self.restore_report.pack(fill="both", expand=True)
+        for variable in (self.final_path, self.map_path):
+            variable.trace_add("write", self.clear_restore_result)
 
     @staticmethod
     def set_text(widget, text):
@@ -462,6 +464,12 @@ class App:
             ), done, "redacting",
         )
 
+    def clear_restore_result(self, *_):
+        self.last_restore_report = None
+        self.restore_issues = []
+        self.set_text(self.restore_report, self.t("restore_pending"))
+        self.set_status("restore_ready")
+
     def choose_final(self):
         value = filedialog.askopenfilename(
             title=self.t("choose_final"), filetypes=[(self.t("word_doc"), "*.docx")]
@@ -477,18 +485,24 @@ class App:
             self.map_path.set(value)
 
     def restore(self):
+        if self.busy:
+            return
+        self.clear_restore_result()
         if not self.final_path.get() or not self.map_path.get():
             messagebox.showinfo(
                 self.t("choose_files_title"), self.t("choose_files_body"), parent=self.root
             )
             return
-        source, mapping = Path(self.final_path.get()), Path(self.map_path.get())
+        inputs = (self.final_path.get(), self.map_path.get())
+        source, mapping = map(Path, inputs)
 
         def inspect_source():
             raw = source.read_bytes()
             return sha256(raw).hexdigest(), Package(raw).issues()
 
         def inspected(result):
+            if inputs != (self.final_path.get(), self.map_path.get()):
+                return
             source_hash, issues = result
             self.restore_issues = issues
             if issues:
@@ -510,6 +524,7 @@ class App:
         self.run(inspect_source, inspected, "inspecting_final")
 
     def finish_restore(self, source, mapping, acknowledged, expected_source_hash=None):
+        inputs = (self.final_path.get(), self.map_path.get())
         password = self.password()
         if password is None:
             return
@@ -527,6 +542,8 @@ class App:
 
         def done(report):
             self.last_output = output
+            if inputs != (self.final_path.get(), self.map_path.get()):
+                return
             self.last_restore_report = report
             self.restore_issues = []
             self.render_restore_report(report)

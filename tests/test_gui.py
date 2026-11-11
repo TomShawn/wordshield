@@ -2,6 +2,7 @@
 import time
 import tkinter as tk
 import json
+import threading
 
 from scripts.generate_fixtures import PASSWORD, highlighted, saved
 from docx import Document
@@ -65,6 +66,7 @@ def test_gui_redact_and_restore_normal_entry(tmp_path, monkeypatch):
         check_group_actions(app, monkeypatch)
         check_language_switch(app)
         check_english_round_trip(app, tmp_path, monkeypatch, settle)
+        check_restore_report_lifecycle(app, tmp_path, monkeypatch)
     finally:
         app.close()
 
@@ -258,3 +260,177 @@ def check_english_round_trip(app, tmp_path, monkeypatch, settle):
     app.language_box.event_generate('<<ComboboxSelected>>')
     app.root.update()
     assert '回填检查结果 通过' in app.restore_report.get('1.0', 'end')
+
+
+def check_restore_report_lifecycle(app, tmp_path, monkeypatch):
+    """Reuse the Tk session to cover changed inputs, failures, cancellation and late results."""
+    from wordshield import gui
+    from wordshield.core import Issue, SafetyError
+    from wordshield.crypto import MappingError
+
+    source = tmp_path / 'english-redacted.docx'
+    mapping = source.with_suffix('.wsmap')
+    successful_report = app.last_restore_report
+    assert successful_report is not None
+
+    def seed_success():
+        app.last_restore_report = successful_report
+        app.restore_issues = []
+        app.render_restore_report(successful_report)
+        app.set_status('restore_complete_status', status=gui.status_text(app.language, '通过'))
+
+    def assert_pending():
+        assert app.last_restore_report is None
+        assert not app.restore_issues
+        assert app.restore_report.get('1.0', 'end').strip() == app.t('restore_pending')
+        assert app.status_key != 'restore_complete_status'
+
+    def wait_for_idle():
+        deadline = time.monotonic() + 20
+        while app.busy and time.monotonic() < deadline:
+            app.root.update()
+            time.sleep(0.01)
+        assert not app.busy
+
+    with monkeypatch.context() as patch:
+        errors = []
+        patch.setattr(gui.messagebox, 'showerror', lambda *a, **k: errors.append(a))
+        patch.setattr(gui.messagebox, 'showinfo', lambda *a, **k: None)
+        patch.setattr(app, 'password', lambda **k: PASSWORD)
+
+        # Both native file-selection callbacks and direct entry edits invalidate results.
+        for variable, choose, value in (
+            (app.final_path, app.choose_final, str(source)),
+            (app.map_path, app.choose_mapping, str(mapping)),
+        ):
+            seed_success()
+            patch.setattr(gui.filedialog, 'askopenfilename', lambda **k: value)
+            choose()
+            assert_pending()
+            seed_success()
+            variable.set('')
+            assert_pending()
+            variable.set(value)
+        app.restore_issues = [Issue('TEXTBOX', '存在文本框，需要在 Word 中人工审查。', 'word/document.xml')]
+        app.map_path.set(str(mapping))
+        assert_pending()
+
+        # A same-input retry invalidates success before the worker starts.
+        seed_success()
+        retry_output = tmp_path / 'report-retry.docx'
+        patch.setattr(gui.filedialog, 'asksaveasfilename', lambda **k: str(retry_output))
+        app.restore()
+        assert_pending()
+        wait_for_idle()
+        assert retry_output.exists()
+        assert app.last_restore_report['status'] == '通过'
+        assert not errors
+
+        # Each background error category leaves no previous success to resurrect.
+        original_package = gui.Package
+        for error in (OSError('fictional I/O failure'), SafetyError('fictional safety failure'),
+                      MappingError('fictional mapping failure'), RuntimeError('fictional failure')):
+            def fail_package(_raw, error=error):
+                raise error
+            patch.setattr(gui, 'Package', fail_package)
+            seed_success()
+            app.restore()
+            wait_for_idle()
+            assert_pending()
+            assert errors
+            for language in ('English', '中文'):
+                app.language_choice.set(language)
+                app.language_box.event_generate('<<ComboboxSelected>>')
+                app.root.update()
+                assert_pending()
+            errors.clear()
+        patch.setattr(gui, 'Package', original_package)
+
+        # A real decryption failure also clears the previous successful report.
+        seed_success()
+        wrong_password_output = tmp_path / 'wrong-password.docx'
+        patch.setattr(app, 'password', lambda **k: 'fictional-wrong-password')
+        patch.setattr(gui.filedialog, 'asksaveasfilename', lambda **k: str(wrong_password_output))
+        app.restore()
+        wait_for_idle()
+        assert_pending()
+        assert errors and not wrong_password_output.exists()
+        errors.clear()
+        patch.setattr(app, 'password', lambda **k: PASSWORD)
+
+        # Missing inputs and cancelled dialogs cannot leave a successful result visible.
+        app.final_path.set('')
+        seed_success()
+        app.restore()
+        assert_pending()
+        app.final_path.set(str(source))
+        for cancel_password in (True, False):
+            seed_success()
+            patch.setattr(app, 'password', lambda **k: None if cancel_password else PASSWORD)
+            patch.setattr(gui.filedialog, 'asksaveasfilename', lambda **k: '')
+            app.restore()
+            wait_for_idle()
+            assert_pending()
+        patch.setattr(app, 'password', lambda **k: PASSWORD)
+
+        # Editing an input during inspection discards its late callback and password prompt.
+        entered, resume = threading.Event(), threading.Event()
+        prompts = []
+        def inspect_later(raw):
+            entered.set()
+            assert resume.wait(10)
+            return original_package(raw)
+        patch.setattr(gui, 'Package', inspect_later)
+        patch.setattr(app, 'password', lambda **k: prompts.append(True) or PASSWORD)
+        app.restore()
+        try:
+            assert entered.wait(5)
+            app.final_path.set(str(tmp_path / 'different-final.docx'))
+        finally:
+            resume.set()
+        wait_for_idle()
+        assert_pending()
+        assert not prompts
+        patch.setattr(gui, 'Package', original_package)
+        app.final_path.set(str(source))
+
+        # An export already underway may finish, but its result belongs to its captured inputs.
+        original_export = gui.export_restored
+        entered, resume = threading.Event(), threading.Event()
+        def export_later(*args, **kwargs):
+            entered.set()
+            assert resume.wait(10)
+            return original_export(*args, **kwargs)
+        patch.setattr(gui, 'export_restored', export_later)
+        late_output = tmp_path / 'late-restoration.docx'
+        patch.setattr(gui.filedialog, 'asksaveasfilename', lambda **k: str(late_output))
+        app.restore()
+        deadline = time.monotonic() + 10
+        try:
+            while not entered.is_set() and time.monotonic() < deadline:
+                app.root.update()
+                time.sleep(0.01)
+            assert entered.is_set()
+            app.map_path.set(str(tmp_path / 'different-mapping.wsmap'))
+        finally:
+            resume.set()
+        wait_for_idle()
+        assert late_output.exists()
+        assert app.last_output == late_output
+        assert_pending()
+        assert not errors
+
+        # A subsequent successful retry displays a current report in both languages.
+        patch.setattr(gui, 'export_restored', original_export)
+        app.map_path.set(str(mapping))
+        retry_output = tmp_path / 'current-restoration.docx'
+        patch.setattr(gui.filedialog, 'asksaveasfilename', lambda **k: str(retry_output))
+        app.restore()
+        wait_for_idle()
+        for language in ('English', '中文'):
+            app.language_choice.set(language)
+            app.language_box.event_generate('<<ComboboxSelected>>')
+            app.root.update()
+            assert app.last_restore_report['status'] == '通过'
+            assert app.t('restore_result', status=gui.status_text(app.language, '通过')) in app.restore_report.get('1.0', 'end')
+        assert not errors

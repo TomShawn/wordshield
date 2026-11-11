@@ -58,6 +58,10 @@ TEXTS = {
         "回填后将在此处显示报告。已删除的占位符只报告，不推测恢复位置。",
         "The restoration report will appear here. Deleted placeholders are reported without guessing a restoration location.",
     ),
+    "restore_ready": (
+        "请核对当前定稿和映射表，然后检查并回填。",
+        "Verify the current final DOCX and mapping, then inspect and restore.",
+    ),
     "open_restored": ("打开最近生成的回填文档", "Open latest restored document"),
     "origin_highlight": ("黄色高亮", "Yellow highlight"),
     "origin_unmarked": ("未标记同文", "Unmarked identical text"),
