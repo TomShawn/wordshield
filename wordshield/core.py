@@ -522,10 +522,14 @@ def replace(paragraph: Paragraph, start: int, end: int, value: str, clear_yellow
     covered = [s for s in paragraph.spans if s.start < end and s.end > start]
     if not covered or sum(min(s.end, end) - max(s.start, start) for s in covered) != end - start:
         raise SafetyError("替换跨越了不支持的结构边界，已阻止导出。")
+    # 新文字放进覆盖字符最多的 run，沿用其格式；并列时取第一个。Word 会把【、SECRET_001、】
+    # 拆成三个 run，用户双击只选中中间部分加粗时，回填原文应随之加粗，而不是沿用括号的格式。
+    target = max(range(len(covered)),
+                 key=lambda i: (min(covered[i].end, end) - max(covered[i].start, start), -i))
     for index, span in enumerate(covered):
         text = span.node.text or ""
         left, right = max(start - span.start, 0), min(end - span.start, len(text))
-        span.node.text = text[:left] + (value if index == 0 else "") + text[right:]
+        span.node.text = text[:left] + (value if index == target else "") + text[right:]
         span.node.set(XML_SPACE, "preserve")
         if clear_yellow:
             run = span.node.getparent()

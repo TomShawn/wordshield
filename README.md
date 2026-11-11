@@ -219,7 +219,7 @@ Confirm the mapping belongs to this material and check case, spaces, and the sav
 
 ### Fix formatting or pagination changes after restoration
 
-Text length affects wrapping, table height, and pagination. Mixed formatting within one entity cannot always be restored character by character. Review and adjust the final DOCX in Word.
+Text length affects wrapping, table height, and pagination. Restored text takes the formatting of the part of the placeholder that covers the most characters. Word stores the brackets of `【SECRET_001】` separately, so bolding only `SECRET_001` still makes the restored text bold. Mixed formatting within one placeholder, such as italicizing half of it, is not restored character by character. Review and adjust the final DOCX in Word.
 
 ## Developer setup
 
@@ -328,7 +328,7 @@ With Microsoft Word installed, run:
 scripts/dev.sh word-acceptance
 ```
 
-The script generates the fictional fixtures in `word-acceptance` under the external development directory and drives Word through AppleScript. It checks that Word opens every fixture, including redacted and restored output, and that a document opened and saved again by Word still yields the same highlights and restores completely. On the first run, macOS may ask whether to allow control of Word, and Word may ask for access to the folder. Grant both.
+The script generates the fictional fixtures in `word-acceptance` under the external development directory and drives Word through AppleScript. It checks that Word opens every fixture, including redacted and restored output, and that a document opened and saved again by Word still yields the same highlights and restores completely. It also edits the redacted document in Word: it inserts text next to placeholders, changes their formatting, appends a paragraph, deletes and duplicates placeholders, and edits with Track Changes on. It then checks the restoration result and report for each case. On the first run, macOS may ask whether to allow control of Word, and Word may ask for access to the folder. Grant both.
 
 On Intel Macs, recent `cryptography` releases may not provide a prebuilt wheel. If pip compiles it from source, it links Homebrew OpenSSL, and PyInstaller replaces that library with the older, identically named OpenSSL bundled with python.org Python, so the packaged application fails at startup. `scripts/dev.sh setup` therefore prefers binary wheels, and the build stops early if a source-built extension is detected. To repair an existing environment, install an official wheel, for example:
 
@@ -362,7 +362,7 @@ Finder, IDEs, Git clients, antivirus tools, Microsoft Word, backup tools, and sy
 
 ## Test and verify
 
-The current suite contains 160 automated tests covering highlight extraction, cross-run replacement, tables, headers, footers, footnotes, style inheritance, modern Word identifiers and formatting, metadata relationships, group renaming, residual scanning, encryption, malformed placeholders, output rollback, unsupported structures, bilingual UI behavior, clean-directory behavior, and GUI workflows.
+The current suite contains 161 automated tests covering highlight extraction, cross-run replacement, tables, headers, footers, footnotes, style inheritance, modern Word identifiers and formatting, metadata relationships, group renaming, residual scanning, encryption, malformed placeholders, output rollback, unsupported structures, bilingual UI behavior, clean-directory behavior, and GUI workflows.
 
 The latest verified build and startup check confirmed:
 
@@ -373,7 +373,7 @@ The latest verified build and startup check confirmed:
 
 The English interface has also been checked after a real mouse selection on an unlocked Mac. A restoration-page layout issue found during that review was fixed so the button for opening the restored document remains visible. Layout tests now require every control on the active page to be displayed at both supported window sizes.
 
-Fictional DOCX fixtures have also been rendered locally for layout inspection. Microsoft Word 16.102.3 on macOS 15.0.1 opened all 12 fictional fixtures, including redacted and restored output. After Word saved them again, highlights were still detected identically and restoration completed with matching text. Word only adds empty paragraphs after tables and footnote/endnote separators when saving, which does not affect detection or restoration. Apple Developer ID signing, notarization, and broader macOS-version validation remain outstanding.
+Fictional DOCX fixtures have also been rendered locally for layout inspection. Microsoft Word 16.102.3 on macOS 15.0.1 opened all 12 fictional fixtures, including redacted and restored output. After Word saved them again, highlights were still detected identically and restoration completed with matching text. Word only adds empty paragraphs after tables and footnote/endnote separators when saving, which does not affect detection or restoration. After real edits in Word, restoration kept the inserted text, bold, font, and color, reported deleted and duplicated placeholders, and required risk confirmation for tracked changes. Apple Developer ID signing, notarization, and broader macOS-version validation remain outstanding.
 
 ## Known limitations
 

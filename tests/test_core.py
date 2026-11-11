@@ -179,6 +179,33 @@ def test_restore_keeps_ai_format():
     assert run.bold and run.italic and run.text == "林知远"
 
 
+def test_restore_uses_format_of_run_covering_most_of_placeholder():
+    # Word 保存时把【、SECRET_001、】拆成三个 run；双击只选中中间部分加粗。
+    out, encrypted, _ = redact(analyze(simple([("签约方", False), ("林知远", True), ("。", False)])), PASSWORD)
+    doc = Document(BytesIO(out))
+    paragraph = doc.paragraphs[0]
+    token_run = next(run for run in paragraph.runs if "【SECRET_001】" in run.text)
+    before, after = token_run.text.split("【SECRET_001】")
+    token_run.text = before + "【"
+    middle = OxmlElement("w:r")
+    middle.append(OxmlElement("w:rPr"))
+    middle[0].append(OxmlElement("w:b"))
+    middle_text = OxmlElement("w:t")
+    middle_text.text = "SECRET_001"
+    middle.append(middle_text)
+    closing = OxmlElement("w:r")
+    closing_text = OxmlElement("w:t")
+    closing_text.text = "】" + after
+    closing.append(closing_text)
+    token_run._r.addnext(middle)
+    middle.addnext(closing)
+    result, report = restore(saved(doc), encrypted, PASSWORD)
+    assert report["status"] == "通过"
+    runs = [run for run in Document(BytesIO(result)).paragraphs[0].runs if run.text]
+    assert "".join(run.text for run in runs) == "签约方林知远。"
+    assert [run.text for run in runs if run.bold] == ["林知远"]
+
+
 def test_password_and_tampering():
     _, encrypted, _ = redact(analyze(simple([("林知远", True)])), PASSWORD)
     assert "林知远".encode() not in encrypted
