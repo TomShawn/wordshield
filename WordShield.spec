@@ -17,6 +17,6 @@ collection = COLLECT(exe, analysis.binaries, analysis.datas,
 app = BUNDLE(collection, name='WordShield.app', icon=None,
              bundle_identifier='local.wordshield.offline',
              info_plist={'CFBundleDisplayName': 'Word 离线脱敏与回填',
-                         'CFBundleShortVersionString': '0.2.0',
+                         'CFBundleShortVersionString': '0.2.1',
                          'NSHighResolutionCapable': True,
                          'NSPrincipalClass': 'NSApplication'})

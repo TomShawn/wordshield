@@ -14,7 +14,7 @@ def protected_directories() -> tuple[Path, ...]:
         return (PROJECT_ROOT,)
     executable = Path(sys.executable).resolve()
     bundle = next((parent for parent in executable.parents if parent.suffix == '.app'), None)
-    installation = bundle.parent if bundle is not None else executable.parent
+    installation = bundle if bundle is not None else executable.parent
     # 从源码目录的构建结果启动时，也保护整个源码目录。
     for parent in (installation, *installation.parents):
         if (parent / 'pyproject.toml').is_file() and (parent / 'wordshield').is_dir():
@@ -27,7 +27,7 @@ def require_external(path: Path) -> Path:
     in_checkout = any((parent / 'pyproject.toml').is_file() and (parent / 'wordshield').is_dir()
                       for parent in (resolved, *resolved.parents))
     if in_checkout or any(resolved.is_relative_to(root.resolve()) for root in protected_directories()):
-        raise ValueError('请选用项目及应用安装目录之外的文件夹，以保持程序目录干净。')
+        raise ValueError('请选择项目目录和应用包之外的文件夹，以保持程序目录干净。')
     return resolved
 
 

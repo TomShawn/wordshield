@@ -12,7 +12,7 @@ from wordshield.storage import OutputError, write_outputs
 
 def test_outputs_cannot_be_saved_inside_source_checkout():
     target = PROJECT_ROOT / 'forbidden-output.docx'
-    with pytest.raises(OutputError, match='目录之外'):
+    with pytest.raises(OutputError, match='之外'):
         write_outputs({target: b'fictional'})
     assert not target.exists()
 
@@ -20,18 +20,19 @@ def test_outputs_cannot_be_saved_inside_source_checkout():
 def test_symlink_to_checkout_does_not_bypass_output_guard(tmp_path):
     alias = tmp_path / 'source-alias'
     alias.symlink_to(PROJECT_ROOT, target_is_directory=True)
-    with pytest.raises(OutputError, match='目录之外'):
+    with pytest.raises(OutputError, match='之外'):
         write_outputs({alias / 'forbidden-output.docx': b'fictional'})
     assert not (PROJECT_ROOT / 'forbidden-output.docx').exists()
 
 
-def test_frozen_application_installation_is_protected(tmp_path, monkeypatch):
+def test_frozen_application_bundle_is_protected(tmp_path, monkeypatch):
     installation = tmp_path / 'downloaded-app'
     executable = installation / 'WordShield.app' / 'Contents' / 'MacOS' / 'WordShield'
     monkeypatch.setattr(sys, 'frozen', True, raising=False)
     monkeypatch.setattr(sys, 'executable', str(executable))
-    with pytest.raises(ValueError, match='目录之外'):
-        require_external(installation / 'result.docx')
+    with pytest.raises(ValueError, match='之外'):
+        require_external(installation / 'WordShield.app' / 'Contents' / 'result.docx')
+    assert require_external(installation / 'documents' / 'result.docx') == installation / 'documents' / 'result.docx'
     assert require_external(tmp_path / 'documents' / 'result.docx') == tmp_path / 'documents' / 'result.docx'
 
 
@@ -39,12 +40,12 @@ def test_development_directory_is_external(monkeypatch):
     monkeypatch.delenv('WORDSHIELD_DEV_HOME', raising=False)
     assert not development_directory().is_relative_to(PROJECT_ROOT)
     monkeypatch.setenv('WORDSHIELD_DEV_HOME', str(PROJECT_ROOT / 'cache'))
-    with pytest.raises(ValueError, match='目录之外'):
+    with pytest.raises(ValueError, match='之外'):
         development_directory()
 
 
 def test_generator_refuses_to_create_fixtures_in_project():
-    with pytest.raises(ValueError, match='目录之外'):
+    with pytest.raises(ValueError, match='之外'):
         make_all(PROJECT_ROOT / 'forbidden-fixtures')
     assert not (PROJECT_ROOT / 'forbidden-fixtures').exists()
 
@@ -74,5 +75,19 @@ def test_frozen_application_also_protects_source_checkout_elsewhere(tmp_path, mo
     (checkout / 'pyproject.toml').write_text('[project]\nname="wordshield-offline"\n')
     monkeypatch.setattr(sys, 'frozen', True, raising=False)
     monkeypatch.setattr(sys, 'executable', str(tmp_path / 'installed' / 'WordShield.app' / 'Contents' / 'MacOS' / 'WordShield'))
-    with pytest.raises(ValueError, match='目录之外'):
+    with pytest.raises(ValueError, match='之外'):
         require_external(checkout / 'output.docx')
+
+
+@pytest.mark.parametrize('folder', ['Desktop', 'Documents', 'Downloads', 'Home'])
+def test_frozen_app_allows_sibling_document_folders(tmp_path, monkeypatch, folder):
+    location = tmp_path / folder
+    location.mkdir()
+    executable = location / 'WordShield.app' / 'Contents' / 'MacOS' / 'WordShield'
+    monkeypatch.setattr(sys, 'frozen', True, raising=False)
+    monkeypatch.setattr(sys, 'executable', str(executable))
+    target = location / 'review-output.docx'
+    write_outputs({target: b'fictional'})
+    assert target.read_bytes() == b'fictional'
+    with pytest.raises(ValueError, match='之外'):
+        require_external(location / 'WordShield.app' / 'cache')

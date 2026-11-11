@@ -6,7 +6,7 @@ The user marks sensitive text manually in Word with the yellow **Text Highlight 
 
 WordShield does not attempt to discover sensitive entities automatically. The person reviewing the document remains responsible for marking and checking all confidential content.
 
-Current version: **0.2.0**
+Current version: **0.2.1**
 
 ## Key properties
 
@@ -90,12 +90,15 @@ An **未标记同文** item means highlighted text also appears in an unhighligh
 
 | Button | Purpose |
 | --- | --- |
-| 修改所选分组 | Edit the group of the selected item. Double-clicking a row has the same effect. |
-| 同名异实体单独分组 | Give one occurrence of an identical name a separate placeholder. |
-| 拆分连续高亮 | Divide one contiguous yellow region into multiple items. |
-| 保留／恢复所选原文 | Retain punctuation, an accidental highlight, or explicitly approved public text. Click again to restore replacement. |
+| Assign item to group / 调整所选条目分组 | Assign the selected occurrence to a group. Double-clicking a row has the same effect. |
+| Rename group / 重命名整个分组 | Rename all members of the selected group, including unmarked matches and retained items. |
+| Separate entity / 同名异实体单独分组 | Give one occurrence of an identical name a separate placeholder. |
+| Split highlight / 拆分连续高亮 | Divide one contiguous yellow region into multiple items. |
+| Retain / replace text / 保留／恢复所选原文 | Retain punctuation, an accidental highlight, or explicitly approved public text. Click again to restore replacement. |
 
 Different text values cannot share one group.
+
+Use **Rename group** when changing an entity's group label. Other groups representing same-name entities keep their own assignments. A rename requires a non-empty name that is available, so an existing group's name is rejected. Use **Assign item to group** to change the membership of one occurrence.
 
 Split positions mean “split after this character.” Multiple positions use comma-separated integers. Spaces and punctuation count as characters.
 
@@ -124,7 +127,7 @@ Text boxes, comments, deleted revisions, field instructions, images, formulas, e
 3. Click **设置密码并导出脱敏文件与加密映射表**.
 4. Confirm every retained-original location if prompted.
 5. Enter and confirm a password containing at least 12 characters.
-6. Choose a new filename in a local folder outside the source checkout and application installation directory.
+6. Choose a new filename in a local folder outside the source checkout and the `.app` bundle.
 
 WordShield creates three files next to each other:
 
@@ -158,7 +161,7 @@ Save the edited result as a local DOCX before restoration.
 4. Click **检查定稿并回填**.
 5. Review structural warnings and inspect the document in Word when required.
 6. Enter the mapping password.
-7. Save the restored result under a new name outside the project and application directories.
+7. Save the restored result under a new name outside the source checkout and the `.app` bundle.
 8. Read the on-screen report and the generated JSON report.
 9. Click **打开最近生成的回填文档** and verify the final content and formatting in Word.
 
@@ -201,7 +204,7 @@ Choose **选择 DOCX 并识别** again and repeat the preview review. WordShield
 
 ### The selected output folder is rejected
 
-Choose a separate local documents folder. WordShield prevents output inside a source checkout or the installed application directory so those directories remain clean.
+Choose a local documents folder. Source checkouts and `.app` bundles are protected. Document folders beside an application in Desktop, Documents, or Downloads can receive output.
 
 ### The password is rejected
 
@@ -300,6 +303,7 @@ The project currently does not produce a ZIP archive automatically. The complete
 - Contiguous yellow text is merged across runs; paragraphs, tabs, breaks, and objects remain boundaries.
 - Exact repeated text is matched longest-first, with per-occurrence grouping and retain controls.
 - Metadata, thumbnails, custom XML, bindings, document variables, and revision-session identifiers are removed from redacted output.
+- Relationship cleanup resolves internal targets relative to their source parts and removes references to deleted metadata, including custom relationship types.
 - Residual scanning separates visible/content values from recognized formatting metadata to avoid false positives on common numbers and short identifiers.
 - Unsupported yellow-highlighted content is blocking. Other complex structures are reported for manual review.
 - Mapping files use a random 16-byte salt, Scrypt (`N=32768`, `r=8`, `p=1`), a random 12-byte nonce, and AES-256-GCM authenticated encryption.
@@ -308,7 +312,7 @@ The project currently does not produce a ZIP archive automatically. The complete
 
 ## Clean-checkout and confidentiality policy
 
-The application refuses to save processed DOCX files, mappings, or reports inside a source checkout or application installation directory. Business document processing remains in memory until explicit output.
+The application protects source checkouts and `.app` bundles from processed DOCX files, mappings, and reports. The containing Desktop, Documents, or Downloads folder can be used for document output. Business document processing remains in memory until explicit output.
 
 The project's supported commands keep their environments and generated files outside the repository. Automated tests cover output protection, symlink bypass attempts, external fixtures, Git ignore rules, build isolation, and source/application startup without directory changes.
 
@@ -316,11 +320,11 @@ Finder, IDEs, Git clients, antivirus tools, Microsoft Word, backup tools, and sy
 
 ## Test and verify
 
-The current suite contains 85 automated tests covering highlight extraction, cross-run replacement, tables, headers, footers, footnotes, style inheritance, residual scanning, encryption, malformed placeholders, output rollback, unsupported structures, bilingual UI behavior, clean-directory behavior, and GUI workflows.
+The current suite contains 133 automated tests covering highlight extraction, cross-run replacement, tables, headers, footers, footnotes, style inheritance, modern Word identifiers and formatting, metadata relationships, group renaming, residual scanning, encryption, malformed placeholders, output rollback, unsupported structures, bilingual UI behavior, clean-directory behavior, and GUI workflows.
 
 The latest verified build and startup check confirmed:
 
-- 85 tests passed
+- 133 tests passed
 - The supported test workflow did not add or modify repository files
 - No source file was added, removed, or modified by those supported workflows
 - No file inside the packaged application changed during standalone startup

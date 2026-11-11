@@ -150,6 +150,7 @@ class App:
         actions = ttk.Frame(footer)
         actions.pack(fill="x", pady=8)
         self.button(actions, "edit_group", self.edit_group).pack(side="left")
+        self.button(actions, "rename_group", self.rename_group).pack(side="left", padx=(6, 0))
         self.button(actions, "separate_group", self.separate_group).pack(side="left", padx=6)
         self.button(actions, "split_highlight", self.split).pack(side="left")
         self.button(actions, "toggle_retain", self.toggle_exclusion).pack(side="left", padx=6)
@@ -328,6 +329,26 @@ class App:
         item = self.selected()
         if item is not None:
             item.group = self.analysis.new_group()
+            self.refresh()
+
+    def rename_group(self):
+        item = self.selected()
+        if item is None:
+            return
+        count = sum(member.group == item.group for member in self.analysis.occurrences)
+        value = simpledialog.askstring(
+            self.t("rename_group"), self.t("rename_group_prompt", count=count),
+            initialvalue=item.group, parent=self.root,
+        )
+        if value is None:
+            return
+        try:
+            self.analysis.rename_group(item.group, value)
+        except SafetyError as exc:
+            messagebox.showerror(
+                self.t("rename_group_failed"), error_text(self.language, str(exc)), parent=self.root
+            )
+        else:
             self.refresh()
 
     def toggle_exclusion(self):

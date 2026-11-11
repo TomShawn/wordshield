@@ -62,6 +62,7 @@ def test_gui_redact_and_restore_normal_entry(tmp_path, monkeypatch):
         assert export_button.winfo_rooty() + export_button.winfo_height() < root.winfo_rooty() + root.winfo_height()
         check_unmarked_retention(app, tmp_path, monkeypatch, settle)
         check_punctuation_retention(app, monkeypatch)
+        check_group_actions(app, monkeypatch)
         check_language_switch(app)
         check_english_round_trip(app, tmp_path, monkeypatch, settle)
     finally:
@@ -114,6 +115,43 @@ def check_punctuation_retention(app, monkeypatch):
     assert '保留' in app.tree.item(punctuation.key, 'values')[2]
     assert not any(not o.highlighted and o.text == '、' for o in app.analysis.occurrences)
     assert not app.confirmed.get()
+
+
+def check_group_actions(app, monkeypatch):
+    from wordshield import gui
+    from tests.test_core import simple
+    from wordshield.core import analyze
+    app.language_choice.set('English')
+    app.language_box.event_generate('<<ComboboxSelected>>')
+    app.root.update()
+    app.loaded(analyze(simple([('林知远', True), ('、林知远、林知远', False)])))
+    highlighted, retained, separate = app.analysis.occurrences
+    app.tree.selection_set(separate.key)
+    app.separate_group()
+    independent_group = separate.group
+    app.tree.selection_set(retained.key)
+    app.toggle_exclusion()
+    retained = next(item for item in app.analysis.occurrences if item.key == retained.key)
+    separate = next(item for item in app.analysis.occurrences if item.key == separate.key)
+    app.tree.selection_set(highlighted.key)
+    prompts = []
+    def rename_prompt(title, prompt, **options):
+        prompts.append((title, prompt))
+        return 'Representative'
+    monkeypatch.setattr(gui.simpledialog, 'askstring', rename_prompt)
+    app.confirmed.set(True)
+    app.rename_group()
+    assert prompts[0] == ('Rename group', 'Enter a new name for all 2 items in this group.')
+    assert highlighted.group == retained.group == 'Representative'
+    assert separate.group == independent_group
+    assert retained.excluded
+    assert not app.confirmed.get()
+    app.tree.selection_set(highlighted.key)
+    monkeypatch.setattr(gui.simpledialog, 'askstring', lambda *args, **kwargs: 'Assigned item')
+    app.edit_group()
+    assert highlighted.group == 'Assigned item'
+    assert retained.group == 'Representative'
+    assert separate.group == independent_group
 
 
 def check_language_switch(app):

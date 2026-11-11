@@ -19,6 +19,7 @@ from .storage import OutputError, write_outputs
 
 W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 R = "http://schemas.openxmlformats.org/package/2006/relationships"
+DOCUMENT_RELATIONSHIPS_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 NS = {"w": W}
 XML_SPACE = "{http://www.w3.org/XML/1998/namespace}space"
 TOKEN = re.compile(r"【SECRET_[0-9]{3,6}】")
@@ -113,6 +114,18 @@ class Analysis:
         item = next(o for o in self.occurrences if o.key == key)
         item.excluded = excluded
         self.refresh_unmarked()
+
+    def rename_group(self, group: str, new_name: str) -> None:
+        new_name = new_name.strip()
+        if not new_name:
+            raise SafetyError("分组名称不能为空。")
+        members = [item for item in self.occurrences if item.group == group]
+        if not members:
+            raise SafetyError("所选分组已不存在，请重新选择。")
+        if new_name != group and any(item.group == new_name for item in self.occurrences):
+            raise SafetyError("分组名称已存在，请使用新名称。")
+        for item in members:
+            item.group = new_name
 
     def split(self, key: str, offsets: list[int]) -> None:
         """在用户指定的字符边界拆分连续高亮，不猜测实体边界。"""
@@ -358,7 +371,9 @@ class Package:
             if name.endswith(".rels"):
                 for rel in list(root):
                     kind = rel.get("Type", "")
-                    if any(part in kind for part in ("metadata/", "/extended-properties", "/custom-properties", "/customXml", "/thumbnail")):
+                    deleted_target = (rel.get("TargetMode") != "External"
+                                      and _relationship_target(name, rel.get("Target", "")) in removed)
+                    if deleted_target or any(part in kind for part in ("metadata/", "/extended-properties", "/custom-properties", "/customXml", "/thumbnail")):
                         root.remove(rel)
             if name == "[Content_Types].xml":
                 for item in list(root):
@@ -464,7 +479,7 @@ FORMATTING_ELEMENTS = frozenset("""
     b i bCs iCs caps smallCaps strike dstrike outline shadow emboss imprint noProof
     snapToGrid vanish webHidden color highlight u vertAlign shd textEffect textScale
     fitText lang rtl cs rFonts font altName charset family pitch sig panose1
-    basedOn next link pStyle rStyle numStyleLink styleLink uiPriority qFormat
+    basedOn next link pStyle rStyle tblStyle numStyleLink styleLink uiPriority qFormat
     semiHidden unhideWhenUsed locked autoRedefine hidden contextualSpacing
     keepNext keepLines pageBreakBefore widowControl suppressAutoHyphens
     suppressLineNumbers suppressOverlap adjustRightInd mirrorIndents jc textDirection
@@ -480,6 +495,52 @@ FORMATTING_ELEMENTS = frozenset("""
 """.split())
 
 
+WORD_IDENTIFIER_ATTRIBUTES = {
+    "http://schemas.microsoft.com/office/word/2010/wordml": {"paraId", "textId"},
+    "http://schemas.microsoft.com/office/word/2012/wordml": {"paraId", "paraIdParent", "textId"},
+    "http://schemas.microsoft.com/office/word/2016/wordml/cid": {"paraId", "durableId"},
+}
+
+FORMATTING_ENUM_ATTRIBUTES = {
+    ("headerReference", "type"): {"default", "first", "even"},
+    ("footerReference", "type"): {"default", "first", "even"},
+    ("jc", "val"): {"left", "right", "center", "both", "start", "end", "distribute",
+                    "mediumKashida", "highKashida", "lowKashida", "numTab", "thaiDistribute"},
+    ("lvlJc", "val"): {"left", "right", "center", "both", "start", "end"},
+    ("spacing", "lineRule"): {"auto", "atLeast", "exact"},
+    ("tab", "val"): {"clear", "left", "right", "center", "decimal", "bar", "num", "start", "end"},
+    ("multiLevelType", "val"): {"singleLevel", "multilevel", "hybridMultilevel"},
+    ("u", "val"): {"single", "words", "double", "thick", "dotted", "dottedHeavy",
+                   "dash", "dashedHeavy", "dashLong", "dashLongHeavy", "dotDash", "dashDotHeavy",
+                   "dotDotDash", "dashDotDotHeavy", "wave", "wavyHeavy", "wavyDouble", "none"},
+    ("docGrid", "type"): {"default", "lines", "linesAndChars", "snapToChars"},
+    ("tblLayout", "type"): {"autofit", "fixed"},
+    ("vAlign", "val"): {"top", "center", "both", "bottom"},
+    ("vertAlign", "val"): {"baseline", "superscript", "subscript"},
+    ("textDirection", "val"): {"lrTb", "tbRl", "btLr", "lrTbV", "tbRlV", "tbLrV"},
+    ("br", "type"): {"page", "column", "textWrapping"},
+    ("br", "clear"): {"none", "left", "right", "all"},
+    ("highlight", "val"): {"black", "blue", "cyan", "green", "magenta", "red", "yellow",
+                           "white", "darkBlue", "darkCyan", "darkGreen", "darkMagenta", "darkRed",
+                           "darkYellow", "darkGray", "lightGray", "none"},
+}
+for _element in ("tcW", "tblW", "tblInd", "tblCellSpacing", "top", "bottom", "left", "right", "start", "end"):
+    FORMATTING_ENUM_ATTRIBUTES[(_element, "type")] = {"auto", "dxa", "nil", "pct"}
+for _element in ("top", "bottom", "left", "right", "start", "end", "insideH", "insideV", "bdr", "tl2br", "tr2bl"):
+    FORMATTING_ENUM_ATTRIBUTES[(_element, "val")] = {
+        "nil", "none", "single", "thick", "double", "dotted", "dashed", "dotDash", "dotDotDash",
+        "triple", "thinThickSmallGap", "thickThinSmallGap", "thinThickThinSmallGap",
+        "thinThickMediumGap", "thickThinMediumGap", "thinThickThinMediumGap",
+        "thinThickLargeGap", "thickThinLargeGap", "thinThickThinLargeGap", "wave",
+        "doubleWave", "dashSmallGap", "dashDotStroked", "threeDEmboss", "threeDEngrave", "outset", "inset",
+    }
+
+
+def _relationship_target(rels_part: str, target: str) -> str:
+    directory = posixpath.dirname(posixpath.dirname(rels_part))
+    return posixpath.normpath(posixpath.join(directory, target)).lstrip("/")
+
+
 def _standard_part(name: str) -> bool:
     return bool(re.fullmatch(
         r"\[Content_Types\]\.xml|_rels/\.rels|"
@@ -493,9 +554,20 @@ def _structural_attribute(part: str, node: etree._Element, attr: str, value: str
     """仅排除已知格式/结构值，正文、书签名称、说明和自定义属性仍检查。"""
     element, attribute = etree.QName(node), etree.QName(attr)
     local = element.localname
+    if attribute.namespace == DOCUMENT_RELATIONSHIPS_NS and attribute.localname in {"id", "embed", "link"}:
+        return bool(re.fullmatch(r"rId\d+", value))
+    if attribute.localname in WORD_IDENTIFIER_ATTRIBUTES.get(attribute.namespace, ()):
+        return bool(re.fullmatch(r"[0-9A-Fa-f]{8}", value))
     if attribute.namespace == "http://schemas.openxmlformats.org/markup-compatibility/2006":
         return attribute.localname in {"Ignorable", "MustUnderstand", "ProcessContent"}
     if element.namespace == W and attribute.namespace == W:
+        if value in FORMATTING_ENUM_ATTRIBUTES.get((local, attribute.localname), ()):
+            return True
+        if (local in {"lang", "themeFontLang"} and attribute.localname in {"val", "eastAsia", "bidi"}
+                and re.fullmatch(r"[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*|x-none", value)):
+            return True
+        if local == "rFonts" and attribute.localname == "hint":
+            return value in {"default", "eastAsia", "cs"}
         if local in {"rFonts", "font", "altName"}:
             return attribute.localname in {"ascii", "hAnsi", "eastAsia", "cs", "name", "val",
                                            "asciiTheme", "hAnsiTheme", "eastAsiaTheme", "cstheme", "csTheme"}
@@ -522,7 +594,7 @@ def _structural_attribute(part: str, node: etree._Element, attr: str, value: str
                 return bool(re.fullmatch(r"accent[1-6]|text[12]|background[12]|dark[12]|light[12]|hyperlink|followedHyperlink", value))
         if local in FORMATTING_ELEMENTS:
             # 字体、样式引用为技术标识。其余仅跳过数字、颜色值及格式枚举。
-            if local in {"basedOn", "next", "link", "pStyle", "rStyle", "numStyleLink", "styleLink"}:
+            if local in {"basedOn", "next", "link", "pStyle", "rStyle", "tblStyle", "numStyleLink", "styleLink"}:
                 return attribute.localname == "val"
             if attribute.localname in {"name", "instr", "author", "date", "descr", "title"}:
                 return False
@@ -536,6 +608,8 @@ def _structural_attribute(part: str, node: etree._Element, attr: str, value: str
             return bool(re.fullmatch(r"accent[1-6]|tx[12]|bg[12]|dk[12]|lt[12]|hlink|folHlink|phClr", value))
         return local not in {"t", "fld"} and bool(re.fullmatch(r"[-+]?\d+(?:\.\d+)?|[0-9A-Fa-f]{6}", value))
     if element.namespace == "http://schemas.openxmlformats.org/officeDocument/2006/math":
+        if attribute.namespace == element.namespace and local == "defJc" and attribute.localname == "val":
+            return value in {"left", "right", "center", "centerGroup"}
         return local in {"smallFrac", "lMargin", "rMargin", "wrapIndent"} and value.isdecimal()
     if element.namespace == "urn:schemas-microsoft-com:office:office":
         return (local, attribute.localname) in {("shapedefaults", "spidmax"), ("idmap", "data")} and value.isdecimal()
@@ -547,8 +621,7 @@ def _structural_attribute(part: str, node: etree._Element, attr: str, value: str
         if attribute.localname == "Type":
             return value.startswith(("http://schemas.openxmlformats.org/", "http://schemas.microsoft.com/"))
         if attribute.localname == "Target" and node.get("TargetMode") != "External":
-            directory = posixpath.dirname(posixpath.dirname(part))
-            return _standard_part(posixpath.normpath(posixpath.join(directory, value)))
+            return _standard_part(_relationship_target(part, value))
     if element.namespace == "http://schemas.openxmlformats.org/package/2006/content-types":
         if attribute.localname == "PartName":
             return _standard_part(value.lstrip("/"))
