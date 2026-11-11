@@ -65,9 +65,9 @@ If the entire workflow must remain offline, edit the redacted document with loca
 
 Use text highlighting rather than font color, paragraph shading, or table-cell fill. Those are different Word formatting features.
 
-Highlight as precisely as possible. Punctuation and separator spaces should normally remain outside the highlighted region.
+Highlight as precisely as possible. Punctuation should normally remain outside the highlighted region. Leading and trailing whitespace inside a highlight is ignored automatically, so `John Smith ` and `John Smith` are treated as the same entity and the surrounding spaces stay in the document.
 
-Word may divide one visible name into multiple internal runs. WordShield merges contiguous yellow text within the same paragraph. Paragraph boundaries, tabs, line breaks, and embedded objects remain boundaries.
+Word may divide one visible name into multiple internal runs. WordShield merges contiguous yellow text within the same paragraph. Paragraph boundaries, tabs (including positional tabs in headers and footers), line breaks, and embedded objects remain boundaries.
 
 ## Redact a document
 
@@ -79,7 +79,7 @@ The preview columns mean:
 
 | Column | Meaning |
 | --- | --- |
-| 敏感文字 | Detected text. Display quotation marks show the exact boundary; spaces are part of the value. |
+| 敏感文字 | Detected text. Display quotation marks show the exact boundary. Leading and trailing spaces are excluded; spaces inside the text are part of the value. |
 | 实体分组 | Items in the same group use the same placeholder. |
 | 来源 / 处理 | Shows yellow-highlight or unmarked-match origin and whether the item will be replaced or retained. |
 | 位置 | DOCX part, paragraph number, and character position for manual verification. |
@@ -304,7 +304,8 @@ The project currently does not produce a ZIP archive automatically. The complete
 - Exact repeated text is matched longest-first, with per-occurrence grouping and retain controls.
 - Metadata, thumbnails, custom XML, bindings, document variables, and revision-session identifiers are removed from redacted output.
 - Relationship cleanup resolves internal targets relative to their source parts and removes references to deleted metadata, including custom relationship types.
-- Residual scanning separates visible/content values from recognized formatting metadata to avoid false positives on common numbers and short identifiers.
+- Residual scanning separates visible/content values from recognized formatting metadata, including picture size, position, and identifier values, to avoid false positives on common numbers and short identifiers. Picture alt text and names are still checked.
+- Binary parts such as images are scanned only for encoded matches of at least four bytes, because shorter byte sequences occur by chance in image data. Very short terms, such as a two-digit number or a single CJK character, are therefore not detected inside binary content, which already requires manual review.
 - Unsupported yellow-highlighted content is blocking. Other complex structures are reported for manual review.
 - Mapping files use a random 16-byte salt, Scrypt (`N=32768`, `r=8`, `p=1`), a random 12-byte nonce, and AES-256-GCM authenticated encryption.
 - Output files use exclusive creation and `0600` permissions. Recoverable multi-output write failures remove files created during that attempt.
@@ -320,7 +321,7 @@ Finder, IDEs, Git clients, antivirus tools, Microsoft Word, backup tools, and sy
 
 ## Test and verify
 
-The current suite contains 133 automated tests covering highlight extraction, cross-run replacement, tables, headers, footers, footnotes, style inheritance, modern Word identifiers and formatting, metadata relationships, group renaming, residual scanning, encryption, malformed placeholders, output rollback, unsupported structures, bilingual UI behavior, clean-directory behavior, and GUI workflows.
+The current suite contains 152 automated tests covering highlight extraction, cross-run replacement, tables, headers, footers, footnotes, style inheritance, modern Word identifiers and formatting, metadata relationships, group renaming, residual scanning, encryption, malformed placeholders, output rollback, unsupported structures, bilingual UI behavior, clean-directory behavior, and GUI workflows.
 
 The latest verified build and startup check confirmed:
 

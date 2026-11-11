@@ -20,6 +20,17 @@ from .storage import OutputError, write_outputs
 W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 R = "http://schemas.openxmlformats.org/package/2006/relationships"
 DOCUMENT_RELATIONSHIPS_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+DRAWING_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
+# 图片定位、尺寸与编号所在的命名空间。其中的数字和布尔值是版式数据，不是正文。
+DRAWING_LAYOUT_NS = frozenset({
+    "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing",
+    "http://schemas.microsoft.com/office/word/2010/wordprocessingDrawing",
+    "http://schemas.openxmlformats.org/drawingml/2006/picture",
+    "http://schemas.microsoft.com/office/drawing/2010/main",
+})
+DRAWING_LAYOUT_TEXT = frozenset({"posOffset", "align", "pctWidth", "pctHeight", "pctPosHOffset", "pctPosVOffset"})
+# 二进制部件只按足够长的字节序列匹配，避免两三个字节的短词在图片数据中随机命中。
+MIN_BINARY_MATCH = 4
 NS = {"w": W}
 XML_SPACE = "{http://www.w3.org/XML/1998/namespace}space"
 TOKEN = re.compile(r"【SECRET_[0-9]{3,6}】")
@@ -148,6 +159,10 @@ class Analysis:
         parts = []
         boundaries = [0, *offsets, len(item.text)]
         for start, end in zip(boundaries, boundaries[1:]):
+            trimmed = _trim(item.text, start, end)
+            if trimmed is None:
+                continue  # 仅含空白的片段保留为普通文字
+            start, end = trimmed
             text = item.text[start:end]
             if text not in groups:
                 # 提前占用已分配编号，避免同一次拆分生成重复分组。
@@ -166,10 +181,6 @@ class Analysis:
         for item in self.occurrences:
             if not item.excluded and item.text.strip():
                 groups.setdefault(item.text, item.group)
-        for item in self.occurrences:
-            stripped = item.text.strip()
-            if not item.excluded and stripped and stripped not in groups:
-                groups[stripped] = self.new_group(tuple(groups.values()))
         terms = sorted(groups, key=len, reverse=True)
         occupied_by_paragraph: dict[tuple[str, int], list[tuple[int, int]]] = {}
         for item in self.occurrences:
@@ -304,7 +315,7 @@ class Package:
         t_tag = f"{{{W}}}t"
         txbx_tag = f"{{{W}}}txbxContent"
         boundary_tags = {f"{{{W}}}{tag}" for tag in (
-            "tab", "br", "cr", "drawing", "pict", "object",
+            "tab", "ptab", "br", "cr", "drawing", "pict", "object",
             "fldChar", "instrText", "delText", "sym", "noBreakHyphen",
             "softHyphen", "footnoteReference", "endnoteReference",
         )}
@@ -457,6 +468,16 @@ class Package:
         return buffer.getvalue()
 
 
+def _trim(text: str, start: int, end: int) -> tuple[int, int] | None:
+    """高亮首尾的空白不属于实体，留在原文中，同一实体因此始终使用同一个占位符。"""
+    value = text[start:end]
+    stripped = value.strip()
+    if not stripped:
+        return None
+    start += len(value) - len(value.lstrip())
+    return start, start + len(stripped)
+
+
 def term_matches(text: str, terms: list[str]):
     """左起、最长优先匹配，避免包含关系引起的重复替换。"""
     if not terms:
@@ -475,9 +496,10 @@ def analyze(data: bytes) -> Analysis:
         def finish():
             if not active:
                 return
-            start, end = active[0].start, active[-1].end
-            text = paragraph.text[start:end]
-            if text.strip():
+            trimmed = _trim(paragraph.text, active[0].start, active[-1].end)
+            if trimmed:
+                start, end = trimmed
+                text = paragraph.text[start:end]
                 group = groups.setdefault(text, f"E{len(groups) + 1:03d}")
                 occurrences.append(Occurrence(paragraph.part, paragraph.number, start, end, text, group))
             active.clear()
@@ -541,6 +563,8 @@ FORMATTING_ELEMENTS = frozenset("""
     vAlign vMerge hMerge cantSplit tblHeader tblPrChange pPrChange rPrChange
     footnotePr endnotePr footnote footnoteReference endnote endnoteReference
     separator continuationSeparator comment commentRangeStart commentRangeEnd commentReference
+    gridSpan gridBefore gridAfter pgNumType hyphenationZone drawingGridHorizontalSpacing
+    drawingGridVerticalSpacing displayHorizontalDrawingGridEvery displayVerticalDrawingGridEvery
     bookmarkStart bookmarkEnd proofErr lastRenderedPageBreak
     defaultTabStop zoom characterSpacingControl view compatSetting latentStyles lsdException
 """.split())
@@ -605,6 +629,16 @@ def _structural_attribute(part: str, node: etree._Element, attr: str, value: str
     """仅排除已知格式/结构值，正文、书签名称、说明和自定义属性仍检查。"""
     element, attribute = etree.QName(node), etree.QName(attr)
     local = element.localname
+    if attribute.localname == "uri" and (
+            value.startswith(("http://schemas.openxmlformats.org/", "http://schemas.microsoft.com/"))
+            or re.fullmatch(r"\{[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}\}", value)):
+        return True
+    if element.namespace in DRAWING_LAYOUT_NS:
+        if attribute.localname in {"name", "descr", "title"}:
+            return False
+        if attribute.localname == "relativeFrom":
+            return bool(re.fullmatch(r"[A-Za-z]+", value))
+        return bool(re.fullmatch(r"[-+]?\d+(?:\.\d+)?|[0-9A-Fa-f]{8}|true|false|on|off", value))
     if attribute.namespace == DOCUMENT_RELATIONSHIPS_NS and attribute.localname in {"id", "embed", "link"}:
         return bool(re.fullmatch(r"rId\d+", value))
     if attribute.localname in WORD_IDENTIFIER_ATTRIBUTES.get(attribute.namespace, ()):
@@ -650,7 +684,7 @@ def _structural_attribute(part: str, node: etree._Element, attr: str, value: str
             if attribute.localname in {"name", "instr", "author", "date", "descr", "title"}:
                 return False
             return bool(re.fullmatch(r"[0-9A-Fa-f]+|[-+]?\d+(?:\.\d+)?|auto|none|true|false", value))
-    if element.namespace == "http://schemas.openxmlformats.org/drawingml/2006/main":
+    if element.namespace == DRAWING_NS:
         if local in {"latin", "ea", "cs", "font"} and attribute.localname in {"typeface", "script", "pitchFamily", "charset"}:
             return True
         if local == "prstDash" and attribute.localname == "val":
@@ -676,6 +710,8 @@ def _structural_attribute(part: str, node: etree._Element, attr: str, value: str
     if element.namespace == "http://schemas.openxmlformats.org/package/2006/content-types":
         if attribute.localname == "PartName":
             return _standard_part(value.lstrip("/"))
+        if attribute.localname == "Extension":
+            return bool(re.fullmatch(r"[A-Za-z0-9]{1,10}", value))
         if attribute.localname == "ContentType":
             return value.startswith(("application/vnd.openxmlformats-", "application/xml", "image/"))
     return False
@@ -683,12 +719,15 @@ def _structural_attribute(part: str, node: etree._Element, attr: str, value: str
 
 def _xml_text_blocks(root: etree._Element) -> str:
     chunks: list[str] = []
-    boundary_tags = {f"{{{W}}}p", f"{{{W}}}tc", f"{{{W}}}tr", f"{{{W}}}br", f"{{{W}}}cr", f"{{{W}}}tab"}
+    boundary_tags = {f"{{{W}}}{tag}" for tag in ("p", "tc", "tr", "br", "cr", "tab", "ptab")}
     for event, node in etree.iterwalk(root, events=("start", "end")):
         if event == "start":
             if node.tag in boundary_tags:
                 chunks.append("\ufffc")
-            if node.text:
+            qname = etree.QName(node) if isinstance(node.tag, str) else None
+            layout = (qname is not None and qname.namespace in DRAWING_LAYOUT_NS
+                      and qname.localname in DRAWING_LAYOUT_TEXT)
+            if node.text and not layout:
                 chunks.append(node.text)
         else:
             if node.tag in boundary_tags:
@@ -714,7 +753,8 @@ def residual_parts(package: Package, terms: list[str]) -> list[str]:
             data = b""
         for term in terms:
             if any(term in text for text in haystacks) or any(
-                    term.encode(encoding) in data for encoding in ("utf-8", "utf-16le", "utf-16be")):
+                    len(encoded) >= MIN_BINARY_MATCH and encoded in data
+                    for encoded in (term.encode(e) for e in ("utf-8", "utf-16le", "utf-16be"))):
                 found.add(name)
                 break
     return sorted(found)
@@ -771,7 +811,7 @@ def redact(analysis: Analysis, password: str, *, acknowledged: bool = False,
     package.scrub()
     scan_package.scrub()
     # 除用户逐位置确认的保留项外，已知正文和非结构属性残留仍为硬性阻止。
-    terms = sorted({t for o in selected for t in (o.text, o.text.strip()) if t.strip()}, key=len, reverse=True)
+    terms = sorted({o.text for o in selected if o.text.strip()}, key=len, reverse=True)
     residue = residual_parts(scan_package, terms)
     if residue:
         raise SafetyError("检测到已标记文字仍残留在 DOCX 内部，已阻止导出。请处理未标记位置、隐藏内容或内部属性。涉及部件数 " + str(len(residue)))

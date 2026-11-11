@@ -40,9 +40,9 @@ def simple(segments):
 def test_contiguous_runs_spaces_and_partial():
     data = simple([("公开前", False), ("  林", True), ("知", True), ("远  ", True), ("公开后", False)])
     plan = analyze(data)
-    assert [o.text for o in plan.occurrences] == ["  林知远  "]
+    assert [o.text for o in plan.occurrences] == ["林知远"]
     out, encrypted, _ = redact(plan, PASSWORD)
-    assert "公开前【SECRET_001】公开后" in text(out)
+    assert "公开前  【SECRET_001】  公开后" in text(out)
     result, report = restore(out, encrypted, PASSWORD)
     assert text(result) == text(data)
     assert report["status"] == "通过"

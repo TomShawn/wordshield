@@ -206,7 +206,7 @@ def test_trailing_space_highlight_catches_unmarked_and_attribute_residue():
     doc.add_paragraph('另一位当事人为林知远，住址略。')
     source = saved(doc)
     plan = analyze(source)
-    assert [(o.text, o.highlighted) for o in plan.occurrences] == [('林知远 ', True), ('林知远', False)]
+    assert [(o.text, o.highlighted) for o in plan.occurrences] == [('林知远', True), ('林知远', False)]
     out, encrypted, _ = redact(plan, PASSWORD)
     assert '林知远' not in text(out)
     assert text(restore(out, encrypted, PASSWORD)[0]) == text(source)
@@ -287,3 +287,111 @@ def test_export_restored_detects_changed_source_file(tmp_path):
             expected_source_hash=original_hash,
         )
     assert not out_path.exists()
+
+
+def test_surrounding_whitespace_does_not_split_one_entity_into_two_placeholders():
+    doc = Document()
+    for before, value, after in (('签署人 ', 'John Smith ', 'today.'), ('见证人 ', 'John Smith', '.')):
+        paragraph = doc.add_paragraph(before)
+        highlighted(paragraph, value)
+        paragraph.add_run(after)
+    doc.add_paragraph('John Smith agreed.')
+    source = saved(doc)
+    plan = analyze(source)
+    assert {o.text for o in plan.occurrences} == {'John Smith'}
+    assert len({o.group for o in plan.occurrences}) == 1
+    out, encrypted, report = redact(plan, PASSWORD)
+    assert report['entity_count'] == 1
+    assert '【SECRET_001】 today.' in text(out)
+    assert text(restore(out, encrypted, PASSWORD)[0]) == text(source)
+
+
+def test_split_drops_whitespace_only_parts_and_trims_edges():
+    plan = analyze(simple([('林知远 周映禾', True), ('与周映禾', False)]))
+    plan.split(plan.occurrences[0].key, [3, 4])
+    highlighted_items = [o for o in plan.occurrences if o.highlighted]
+    assert [o.text for o in highlighted_items] == ['林知远', '周映禾']
+    plan = analyze(simple([('林知远 周映禾', True), ('与周映禾', False)]))
+    plan.split(plan.occurrences[0].key, [3])
+    second = next(o for o in plan.occurrences if o.highlighted and o.text == '周映禾')
+    unmarked = next(o for o in plan.occurrences if not o.highlighted)
+    assert second.start == 4 and unmarked.group == second.group
+    out, encrypted, _ = redact(plan, PASSWORD)
+    assert text(out) == '【SECRET_001】 【SECRET_002】与【SECRET_002】'
+
+
+def _header_with_positional_tab():
+    doc = Document()
+    paragraph = doc.sections[0].header.paragraphs[0]
+    highlighted(paragraph, '云岚科技')
+    tab = OxmlElement('w:ptab')
+    for name, value in (('relativeTo', 'margin'), ('alignment', 'right'), ('leader', 'none')):
+        tab.set(qn('w:' + name), value)
+    run = OxmlElement('w:r')
+    run.append(tab)
+    paragraph._p.append(run)
+    highlighted(paragraph, '林知远')
+    doc.add_paragraph('正文')
+    return saved(doc)
+
+
+def test_positional_tab_is_a_boundary_and_layout_survives_restore():
+    from lxml import etree
+    source = _header_with_positional_tab()
+    plan = analyze(source)
+    assert [o.text for o in plan.occurrences] == ['云岚科技', '林知远']
+    out, encrypted, _ = redact(plan, PASSWORD)
+    restored, report = restore(out, encrypted, PASSWORD)
+    assert report['status'] == '通过'
+
+    def sequence(data):
+        root = Package(data).roots['word/header1.xml']
+        return [('PTAB' if etree.QName(n).localname == 'ptab' else n.text)
+                for n in root.iter() if etree.QName(n).localname == 'ptab'
+                or (etree.QName(n).localname == 't' and n.text)]
+    assert sequence(restored) == sequence(source) == ['云岚科技', 'PTAB', '林知远']
+
+
+def _png(width=48, height=48, seed=7):
+    import random, struct, zlib
+    rnd = random.Random(seed)
+    raw = b''.join(b'\x00' + bytes(rnd.randrange(256) for _ in range(width * 3)) for _ in range(height))
+
+    def chunk(kind, data):
+        body = kind + data
+        return struct.pack('>I', len(data)) + body + struct.pack('>I', zlib.crc32(body) & 0xffffffff)
+    return (b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', width, height, 8, 2, 0, 0, 0))
+            + chunk(b'IDAT', zlib.compress(raw, 0)) + chunk(b'IEND', b''))
+
+
+@pytest.mark.parametrize('term, in_image_bytes', [
+    # 2006 来自图片命名空间 URI，2834 来自 3.1 英寸图片的 EMU 尺寸。
+    ('2006', False), ('2834', False),
+    # 两字节短词附在图片数据尾部，确定性地模拟随机命中。
+    ('35', True), ('42', True), ('17', True),
+])
+def test_picture_layout_and_image_bytes_do_not_block_short_terms(term, in_image_bytes):
+    from docx.shared import Inches
+    doc = Document()
+    paragraph = doc.add_paragraph('数值 ')
+    highlighted(paragraph, term)
+    image = _png() + (term.encode('ascii') if in_image_bytes else b'')
+    doc.add_picture(BytesIO(image), width=Inches(3.1))
+    source = saved(doc)
+    out, encrypted, _ = redact(analyze(source), PASSWORD, acknowledged=True)
+    assert text(restore(out, encrypted, PASSWORD, acknowledged=True)[0]) == text(source)
+
+
+def test_picture_alt_text_and_long_binary_matches_are_still_checked():
+    from docx.shared import Inches
+    from wordshield.core import residual_parts
+    doc = Document()
+    highlighted(doc.add_paragraph(), '林知远')
+    doc.add_picture(BytesIO(_png()), width=Inches(1))
+    package = Package(saved(doc))
+    doc_pr = package.roots['word/document.xml'].find('.//{*}docPr')
+    doc_pr.set('descr', '林知远的照片')
+    assert 'word/document.xml' in residual_parts(package, ['林知远'])
+    media = next(name for name in package.parts if name.startswith('word/media/'))
+    package.parts[media] += 'Lin Zhiyuan'.encode('utf-16le')
+    assert media in residual_parts(package, ['Lin Zhiyuan'])
