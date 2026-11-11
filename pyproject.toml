@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "wordshield-offline"
-version = "0.2.1"
+version = "0.2.2"
 description = "完全离线的 Word 黄色高亮脱敏与回填工具"
 requires-python = ">=3.11"
 dependencies = ["python-docx>=1.1,<2", "lxml>=5,<7", "cryptography>=43,<51"]

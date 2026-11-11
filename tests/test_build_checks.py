@@ -1,12 +1,15 @@
 """构建前原生依赖检查与打包入口自检。"""
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
+import tomllib
 
 import pytest
 
 from scripts.check_native_deps import external_dependencies, external_rpaths, main
+import wordshield
 from wordshield.paths import PROJECT_ROOT
 
 SOURCE_BUILT = """\
@@ -23,6 +26,7 @@ OFFICIAL_UNIVERSAL = """\
 \t/usr/lib/libz.1.dylib (compatibility version 1.0.0, current version 1.2.12)
 \t/System/Library/Frameworks/Security.framework/Versions/A/Security (compatibility version 1.0.0, current version 1.0.0)
 \t@loader_path/../lib/libhelper.dylib (compatibility version 1.0.0, current version 1.0.0)
+\tlibhelper.dylib (compatibility version 1.0.0, current version 1.0.0)
 /venv/site-packages/lxml/etree.cpython-312-darwin.so (architecture arm64):
 \t/usr/lib/libSystem.B.dylib (compatibility version 1.0.0, current version 1351.0.0)
 """
@@ -70,5 +74,22 @@ def test_entry_self_test_runs_without_opening_the_interface():
 def test_build_script_runs_both_checks_in_order():
     script = (PROJECT_ROOT / "scripts" / "build_macos.sh").read_text()
     order = [script.index(marker) for marker in (
-        "scripts/check_native_deps.py", "-m pytest", "-m PyInstaller", "WORDSHIELD_SELF_TEST=1")]
+        "scripts/check_native_deps.py", "-m pytest", "-m PyInstaller", "WORDSHIELD_SELF_TEST=1",
+        "git status --porcelain", "/usr/bin/ditto", "shasum -a 256")]
     assert order == sorted(order)
+
+
+def test_version_is_defined_once():
+    project = tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text())["project"]
+    assert project["version"] == wordshield.__version__
+    spec = (PROJECT_ROOT / "WordShield.spec").read_text()
+    assert "wordshield/__init__.py" in spec
+    assert not re.search(r"['\"]\d+\.\d+\.\d+['\"]", spec)
+
+
+def test_unsupported_target_architecture_is_rejected():
+    environment = dict(os.environ, WORDSHIELD_TARGET_ARCH="arm64", PYTHONDONTWRITEBYTECODE="1")
+    result = subprocess.run([str(PROJECT_ROOT / "scripts" / "dev.sh"), "paths"], env=environment,
+                            capture_output=True, text=True, timeout=60)
+    assert result.returncode == 2
+    assert "universal2" in result.stderr

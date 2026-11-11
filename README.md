@@ -6,7 +6,7 @@ The user marks sensitive text manually in Word with the yellow **Text Highlight 
 
 WordShield does not attempt to discover sensitive entities automatically. The person reviewing the document remains responsible for marking and checking all confidential content.
 
-Current version: **0.2.1**
+Current version: **0.2.2**
 
 ## Key properties
 
@@ -43,9 +43,16 @@ The application starts in English. Use the **语言 / Language** selector in the
 
 Preview selection, entity groups, retained-text decisions, and confirmations persist when switching languages. Native macOS dialog buttons and system menus follow the operating system's language settings.
 
-The current build is for Apple Silicon (`arm64`) and uses an ad-hoc local signature. It has not been notarized with an Apple Developer ID. A separate build is required for Intel Macs. The current acceptance environment is macOS 27.0, so other macOS versions should first be tested with fictional material.
+Release archives are named `WordShield-<version>-macOS-<architecture>.zip`. A `universal2` archive runs natively on both Apple Silicon and Intel Macs. The application requires macOS 11 or later. It has been accepted on macOS 27.0 (Apple Silicon, version 0.2.1) and macOS 15.0.1 (Intel, version 0.2.2); test other macOS versions with fictional material first.
 
-If macOS blocks an unnotarized copy, verify its source with the maintainer or your organization administrator before using it.
+The application uses an ad-hoc signature only. It is not signed with an Apple Developer ID and is not notarized, so macOS blocks a downloaded copy on first launch:
+
+1. Verify the archive against the published SHA-256 checksum, for example `shasum -a 256 -c WordShield-0.2.2-macOS-universal2.zip.sha256`.
+2. Extract the archive and move `WordShield.app` to `/Applications`.
+3. Double-click the application. When macOS reports that it cannot verify the developer, close the message.
+4. Open **System Settings › Privacy & Security**, find the message about WordShield, and click **Open Anyway**.
+
+Only do this for an archive whose checksum matches the one published by the maintainer or your organization administrator.
 
 ## Prepare an offline workspace
 
@@ -240,6 +247,7 @@ scripts/dev.sh setup      # Create the external virtual environment and install 
 scripts/dev.sh run        # Run the application from this checkout
 scripts/dev.sh test       # Run the automated test suite
 scripts/dev.sh fixtures   # Generate fictional DOCX fixtures outside the checkout
+scripts/dev.sh word-acceptance  # Check fictional fixtures with the local Microsoft Word
 scripts/dev.sh build      # Build and ad-hoc sign WordShield.app outside the checkout
 scripts/dev.sh paths      # Print the checkout and external development paths
 ```
@@ -251,9 +259,10 @@ The default external location is:
 ```text
 ~/Library/Caches/WordShield-Development/<checkout-id>/
   venv/                  Python development environment
+  venv-universal2/       Environment for universal2 builds (optional)
   fixtures/              Generated fictional DOCX material
   build/                 PyInstaller intermediate files
-  dist/                  Built WordShield.app
+  dist/                  Built WordShield.app, release ZIP, and SHA-256 checksum
   pyinstaller-cache/     PyInstaller cache
   legacy/                Historical artifacts moved from the original workspace
 ```
@@ -292,7 +301,34 @@ scripts/dev.sh build
 scripts/dev.sh paths
 ```
 
-The build command first checks that installed native extensions do not link external dynamic libraries such as Homebrew OpenSSL. It then runs the complete test suite, builds the application in the external development directory, applies an ad-hoc signature, verifies that signature, and runs the packaged executable in a self-test mode (`WORDSHIELD_SELF_TEST=1`) that imports every dependency and performs an in-memory encryption round trip without opening the interface or writing files. The source checkout remains unchanged.
+The build command first checks that installed native extensions do not link external dynamic libraries such as Homebrew OpenSSL. It then runs the complete test suite, builds the application in the external development directory, applies an ad-hoc signature, verifies that signature, and runs the packaged executable in a self-test mode (`WORDSHIELD_SELF_TEST=1`). The self-test imports every dependency and redacts and restores a small fictional document in memory, without opening the interface or writing files. The source checkout remains unchanged.
+
+When the Git working tree is clean, the build also creates `dist/WordShield-<version>-macOS-<architecture>.zip` with `ditto`, which preserves the bundle's symbolic links and signature, and a matching `.sha256` file. It prints the commit the archive was built from. With uncommitted changes, the application is still built, but no release archive is created. Tag the commit before publishing the archive.
+
+The version number is maintained only in `wordshield/__init__.py` and `pyproject.toml`. `WordShield.spec` reads it from `wordshield/__init__.py`.
+
+### Build for Apple Silicon and Intel
+
+A default build contains only the current Mac's architecture. To build a `universal2` application that runs natively on both Apple Silicon and Intel Macs, use a python.org Python installer (which is universal2) and a separate environment:
+
+```sh
+WORDSHIELD_TARGET_ARCH=universal2 scripts/dev.sh setup
+WORDSHIELD_TARGET_ARCH=universal2 scripts/dev.sh build
+```
+
+Setup installs the dependencies and runs `scripts/make_universal2.py`. That script replaces each native extension with its official `universal2` wheel from PyPI. When a package publishes only single-architecture wheels, such as `cffi`, it downloads the official `x86_64` and `arm64` wheels and merges them with `delocate-merge`. It does not compile from source. PyInstaller then refuses to build if any bundled binary lacks either architecture.
+
+The packaged self-test can only run the current Mac's architecture. Before publishing a `universal2` archive built on an Intel Mac, run the application once on an Apple Silicon Mac, and vice versa.
+
+### Check with Microsoft Word
+
+With Microsoft Word installed, run:
+
+```sh
+scripts/dev.sh word-acceptance
+```
+
+The script generates the fictional fixtures in `word-acceptance` under the external development directory and drives Word through AppleScript. It checks that Word opens every fixture, including redacted and restored output, and that a document opened and saved again by Word still yields the same highlights and restores completely. On the first run, macOS may ask whether to allow control of Word, and Word may ask for access to the folder. Grant both.
 
 On Intel Macs, recent `cryptography` releases may not provide a prebuilt wheel. If pip compiles it from source, it links Homebrew OpenSSL, and PyInstaller replaces that library with the older, identically named OpenSSL bundled with python.org Python, so the packaged application fails at startup. `scripts/dev.sh setup` therefore prefers binary wheels, and the build stops early if a source-built extension is detected. To repair an existing environment, install an official wheel, for example:
 
@@ -300,7 +336,6 @@ On Intel Macs, recent `cryptography` releases may not provide a prebuilt wheel. 
 "$(scripts/dev.sh paths | sed -n 's/^开发环境与构建目录 //p')/venv/bin/python" -m pip install --only-binary=:all: --force-reinstall "cryptography>=43,<51"
 ```
 
-The project currently does not produce a ZIP archive automatically. The complete application is located under the external development directory's `dist/WordShield.app`.
 
 ## Technical design
 
@@ -327,7 +362,7 @@ Finder, IDEs, Git clients, antivirus tools, Microsoft Word, backup tools, and sy
 
 ## Test and verify
 
-The current suite contains 158 automated tests covering highlight extraction, cross-run replacement, tables, headers, footers, footnotes, style inheritance, modern Word identifiers and formatting, metadata relationships, group renaming, residual scanning, encryption, malformed placeholders, output rollback, unsupported structures, bilingual UI behavior, clean-directory behavior, and GUI workflows.
+The current suite contains 160 automated tests covering highlight extraction, cross-run replacement, tables, headers, footers, footnotes, style inheritance, modern Word identifiers and formatting, metadata relationships, group renaming, residual scanning, encryption, malformed placeholders, output rollback, unsupported structures, bilingual UI behavior, clean-directory behavior, and GUI workflows.
 
 The latest verified build and startup check confirmed:
 
@@ -338,7 +373,7 @@ The latest verified build and startup check confirmed:
 
 The English interface has also been checked after a real mouse selection on an unlocked Mac. A restoration-page layout issue found during that review was fixed so the button for opening the restored document remains visible. Layout tests now require every control on the active page to be displayed at both supported window sizes.
 
-Fictional DOCX fixtures have also been rendered locally for layout inspection. Microsoft Word acceptance testing, Apple Developer ID signing, notarization, and broader macOS-version validation remain outstanding.
+Fictional DOCX fixtures have also been rendered locally for layout inspection. Microsoft Word 16.102.3 on macOS 15.0.1 opened all 12 fictional fixtures, including redacted and restored output. After Word saved them again, highlights were still detected identically and restoration completed with matching text. Word only adds empty paragraphs after tables and footnote/endnote separators when saving, which does not affect detection or restoration. Apple Developer ID signing, notarization, and broader macOS-version validation remain outstanding.
 
 ## Known limitations
 

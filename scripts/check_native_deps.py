@@ -12,17 +12,16 @@ import sys
 import sysconfig
 
 SYSTEM_PREFIXES = ("/usr/lib/", "/System/Library/")
-RELATIVE_PREFIXES = ("@rpath/", "@loader_path/", "@executable_path/")
 
 
 def external_dependencies(otool_output: str) -> list[str]:
-    """从 `otool -L` 输出中找出既非系统库、也非相对路径的依赖。"""
+    """从 `otool -L` 输出中找出系统目录之外的绝对路径依赖。@rpath 等相对路径由 PyInstaller 处理。"""
     found = []
     for line in otool_output.splitlines()[1:]:
         if not line.startswith(("\t", " ")):
             continue  # 胖二进制中每个架构的标题行
         dependency = line.strip().split(" (", 1)[0]
-        if dependency and not dependency.startswith(SYSTEM_PREFIXES + RELATIVE_PREFIXES):
+        if dependency.startswith("/") and not dependency.startswith(SYSTEM_PREFIXES):
             found.append(dependency)
     return found
 
