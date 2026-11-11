@@ -20,7 +20,11 @@ def test_structural_values_do_not_block_redaction(term):
     assert text(restore(out, encrypted, PASSWORD)[0]) == term
 
 
-@pytest.mark.parametrize('sentence', ['Board Secretary', 'trade secret', 'Top Secret', 'secretary'])
+@pytest.mark.parametrize('sentence', [
+    'Board Secretary', 'trade secret', 'Top Secret', 'secretary',
+    'See the clause [See 5] for details.', 'Refer to [Section 12].',
+    'Classification: TOP SECRET 2024', 'Keep it secret 10 days.',
+])
 def test_ordinary_secret_words_are_allowed(sentence):
     source = simple([('林知远', True), (' ' + sentence, False)])
     out, encrypted, _ = redact(analyze(source), PASSWORD)
@@ -192,3 +196,94 @@ def test_streamed_read_checks_declared_length(monkeypatch):
     monkeypatch.setattr(zipfile.ZipFile, 'open', forged_open)
     with pytest.raises(SafetyError, match='声明长度'):
         Package(source)
+
+
+def test_trailing_space_highlight_catches_unmarked_and_attribute_residue():
+    doc = Document()
+    first = doc.add_paragraph()
+    highlighted(first, '林知远 ')
+    first.add_run('签署合同。')
+    doc.add_paragraph('另一位当事人为林知远，住址略。')
+    source = saved(doc)
+    plan = analyze(source)
+    assert [(o.text, o.highlighted) for o in plan.occurrences] == [('林知远 ', True), ('林知远', False)]
+    out, encrypted, _ = redact(plan, PASSWORD)
+    assert '林知远' not in text(out)
+    assert text(restore(out, encrypted, PASSWORD)[0]) == text(source)
+    package = Package(simple([('林知远 ', True)]))
+    package.roots['word/document.xml'].set('private_note', '林知远')
+    with pytest.raises(SafetyError, match='残留'):
+        redact(analyze(package.serialize()), PASSWORD)
+
+
+def test_whitespace_only_highlight_does_not_spread_to_all_spaces():
+    source = simple([('林知远', True), ('与', False), (' ', True), ('周映禾 在 云岚市 会谈', False)])
+    plan = analyze(source)
+    assert [o.text for o in plan.occurrences] == ['林知远']
+
+
+def test_scrub_clears_revision_author_and_printer_settings():
+    doc = Document()
+    highlighted(doc.add_paragraph(), '林知远')
+    insertion = OxmlElement('w:ins')
+    insertion.set(qn('w:id'), '1')
+    insertion.set(qn('w:author'), 'Fictional Reviewer')
+    insertion.set(qn('w:initials'), 'FR')
+    insertion.set(qn('w:date'), '2026-11-11T00:00:00Z')
+    run, node = OxmlElement('w:r'), OxmlElement('w:t')
+    node.text = '公开修订内容'
+    run.append(node)
+    insertion.append(run)
+    doc.add_paragraph()._p.append(insertion)
+    source = replace_parts(saved(doc), {'word/printerSettings/printerSettings1.bin': b'\x00' * 32})
+    plan = analyze(source)
+    assert not any(i.blocking for i in plan.issues)
+    out, encrypted, _ = redact(plan, PASSWORD, acknowledged=True)
+    exported = Package(out)
+    assert 'word/printerSettings/printerSettings1.bin' not in exported.parts
+    xml = exported.parts['word/document.xml'].decode('utf-8')
+    assert 'Fictional Reviewer' not in xml and '2026-11-11' not in xml
+    restored, report = restore(out, encrypted, PASSWORD, acknowledged=True)
+    assert report['placeholder_status'] == '通过'
+    assert '林知远' in text(restored)
+
+
+def test_cross_paragraph_text_does_not_false_positive_residue():
+    doc = Document()
+    highlighted(doc.add_paragraph(), '林知远')
+    doc.add_paragraph('第一段末尾是格林')
+    doc.add_paragraph('知远是第二段开头')
+    source = saved(doc)
+    out, encrypted, _ = redact(analyze(source), PASSWORD)
+    assert text(restore(out, encrypted, PASSWORD)[0]) == text(source)
+
+
+def test_assign_group_rejects_conflicting_text_and_empty_name():
+    plan = analyze(simple([('林知远', True), ('、', False), ('周映禾', True)]))
+    with pytest.raises(SafetyError, match='不能为空'):
+        plan.assign_group(plan.occurrences[0].key, '   ')
+    with pytest.raises(SafetyError, match='不同文字'):
+        plan.assign_group(plan.occurrences[-1].key, plan.occurrences[0].group)
+    plan.assign_group(plan.occurrences[0].key, '自定义分组')
+    assert plan.occurrences[0].group == '自定义分组'
+
+
+def test_export_restored_detects_changed_source_file(tmp_path):
+    from hashlib import sha256
+    from wordshield.core import export_restored
+    source_data = simple([('林知远', True)])
+    redacted_bytes, encrypted_bytes, _ = redact(analyze(source_data), PASSWORD)
+    final_path = tmp_path / 'final.docx'
+    map_path = tmp_path / 'final.wsmap'
+    out_path = tmp_path / 'restored.docx'
+    report_path = tmp_path / 'restored.json'
+    final_path.write_bytes(redacted_bytes)
+    map_path.write_bytes(encrypted_bytes)
+    original_hash = sha256(redacted_bytes).hexdigest()
+    final_path.write_bytes(simple([('其他内容', False)]))
+    with pytest.raises(SafetyError, match='发生变化'):
+        export_restored(
+            final_path, map_path, out_path, report_path, PASSWORD,
+            expected_source_hash=original_hash,
+        )
+    assert not out_path.exists()

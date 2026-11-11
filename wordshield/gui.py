@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from hashlib import sha256
 from pathlib import Path
 import subprocess
 import sys
@@ -321,8 +322,15 @@ class App:
             self.t("group_title"), self.t("group_prompt"),
             initialvalue=item.group, parent=self.root,
         )
-        if value and value.strip():
-            item.group = value.strip()
+        if value is None:
+            return
+        try:
+            self.analysis.assign_group(item.key, value)
+        except SafetyError as exc:
+            messagebox.showerror(
+                self.t("group_title"), error_text(self.language, str(exc)), parent=self.root
+            )
+        else:
             self.refresh()
 
     def separate_group(self):
@@ -476,7 +484,12 @@ class App:
             return
         source, mapping = Path(self.final_path.get()), Path(self.map_path.get())
 
-        def inspected(issues):
+        def inspect_source():
+            raw = source.read_bytes()
+            return sha256(raw).hexdigest(), Package(raw).issues()
+
+        def inspected(result):
+            source_hash, issues = result
             self.restore_issues = issues
             if issues:
                 self.render_restore_issues()
@@ -493,10 +506,10 @@ class App:
                 )
                 if not acknowledged:
                     return
-            self.finish_restore(source, mapping, acknowledged)
-        self.run(lambda: Package(source.read_bytes()).issues(), inspected, "inspecting_final")
+            self.finish_restore(source, mapping, acknowledged, source_hash)
+        self.run(inspect_source, inspected, "inspecting_final")
 
-    def finish_restore(self, source, mapping, acknowledged):
+    def finish_restore(self, source, mapping, acknowledged, expected_source_hash=None):
         password = self.password()
         if password is None:
             return
@@ -525,6 +538,7 @@ class App:
             lambda: export_restored(
                 source, mapping, output, report_path,
                 password, acknowledged=acknowledged, report_language=report_language,
+                expected_source_hash=expected_source_hash,
             ), done, "restoring",
         )
 

@@ -127,6 +127,15 @@ class Analysis:
         for item in members:
             item.group = new_name
 
+    def assign_group(self, key: str, group: str) -> None:
+        group = group.strip()
+        if not group:
+            raise SafetyError("分组名称不能为空。")
+        item = next(o for o in self.occurrences if o.key == key)
+        if any(o is not item and o.group == group and o.text != item.text for o in self.occurrences):
+            raise SafetyError("不同文字不能共用同一分组，请修改分组。")
+        item.group = group
+
     def split(self, key: str, offsets: list[int]) -> None:
         """在用户指定的字符边界拆分连续高亮，不猜测实体边界。"""
         item = next(o for o in self.occurrences if o.key == key)
@@ -155,12 +164,18 @@ class Analysis:
         self.occurrences = [o for o in self.occurrences if o.highlighted]
         groups: dict[str, str] = {}
         for item in self.occurrences:
-            if not item.excluded:
+            if not item.excluded and item.text.strip():
                 groups.setdefault(item.text, item.group)
+        for item in self.occurrences:
+            stripped = item.text.strip()
+            if not item.excluded and stripped and stripped not in groups:
+                groups[stripped] = self.new_group(tuple(groups.values()))
         terms = sorted(groups, key=len, reverse=True)
+        occupied_by_paragraph: dict[tuple[str, int], list[tuple[int, int]]] = {}
+        for item in self.occurrences:
+            occupied_by_paragraph.setdefault((item.part, item.paragraph), []).append((item.start, item.end))
         for paragraph in self.package.paragraphs():
-            occupied = [(o.start, o.end) for o in self.occurrences
-                        if o.part == paragraph.part and o.paragraph == paragraph.number]
+            occupied = occupied_by_paragraph.setdefault((paragraph.part, paragraph.number), [])
             for start, end, term in term_matches(paragraph.text, terms):
                 if any(start < b and end > a for a, b in occupied):
                     continue
@@ -231,65 +246,89 @@ class Package:
         except Exception:
             raise SafetyError("DOCX 的关系或主文档结构无法通过 python-docx 检查。") from None
         self.styles = {}
+        self._default_p_styles: tuple[str, ...] = ()
+        self._style_highlight: dict[str | None, str | None] = {}
+        self._default_highlight: str | None = None
         root = self.roots.get("word/styles.xml")
         if root is not None:
             self.styles = {s.get(f"{{{W}}}styleId"): s for s in root.findall("w:style", NS)}
+            self._default_p_styles = tuple(
+                key for key, style in self.styles.items()
+                if style.get(f"{{{W}}}default") == "1" and style.get(f"{{{W}}}type") == "paragraph"
+            )
+            default_rpr = root.find("w:docDefaults/w:rPrDefault/w:rPr", NS)
+            if default_rpr is not None:
+                hl = default_rpr.find("w:highlight", NS)
+                if hl is not None:
+                    self._default_highlight = hl.get(f"{{{W}}}val")
+            for style_id in self.styles:
+                visited = set()
+                curr = style_id
+                while curr in self.styles and curr not in visited:
+                    visited.add(curr)
+                    style = self.styles[curr]
+                    rpr = style.find("w:rPr", NS)
+                    if rpr is not None:
+                        hl = rpr.find("w:highlight", NS)
+                        if hl is not None:
+                            self._style_highlight[style_id] = hl.get(f"{{{W}}}val")
+                            break
+                    parent = style.find("w:basedOn", NS)
+                    curr = parent.get(f"{{{W}}}val") if parent is not None else None
 
     def yellow(self, node: etree._Element, paragraph: etree._Element) -> bool:
         run = node.getparent()
-        props = [run.find("w:rPr", NS)]
-        style_node = run.find("w:rPr/w:rStyle", NS)
-        paragraph_style = paragraph.find("w:pPr/w:pStyle", NS)
-        style_ids = []
-        if style_node is not None:
-            style_ids.append(style_node.get(f"{{{W}}}val"))
-        if paragraph_style is not None:
-            style_ids.append(paragraph_style.get(f"{{{W}}}val"))
-        else:
-            style_ids.extend(key for key, style in self.styles.items()
-                             if style.get(f"{{{W}}}default") == "1" and
-                             style.get(f"{{{W}}}type") == "paragraph")
-        for style_id in style_ids:
-            visited = set()
-            while style_id in self.styles and style_id not in visited:
-                visited.add(style_id)
-                style = self.styles[style_id]
-                props.append(style.find("w:rPr", NS))
-                parent = style.find("w:basedOn", NS)
-                style_id = parent.get(f"{{{W}}}val") if parent is not None else None
-        root = self.roots.get("word/styles.xml")
-        if root is not None:
-            props.append(root.find("w:docDefaults/w:rPrDefault/w:rPr", NS))
-        for prop in props:
-            if prop is not None:
-                highlight = prop.find("w:highlight", NS)
-                if highlight is not None:
-                    return highlight.get(f"{{{W}}}val") == "yellow"
-        return False
+        rpr = run.find(f"{{{W}}}rPr") if run is not None else None
+        if rpr is not None:
+            hl = rpr.find(f"{{{W}}}highlight")
+            if hl is not None:
+                return hl.get(f"{{{W}}}val") == "yellow"
+            style_node = rpr.find(f"{{{W}}}rStyle")
+            if style_node is not None:
+                val = self._style_highlight.get(style_node.get(f"{{{W}}}val"))
+                if val is not None:
+                    return val == "yellow"
+        ppr = paragraph.find(f"{{{W}}}pPr")
+        p_style = ppr.find(f"{{{W}}}pStyle") if ppr is not None else None
+        p_style_ids = (p_style.get(f"{{{W}}}val"),) if p_style is not None else self._default_p_styles
+        for style_id in p_style_ids:
+            val = self._style_highlight.get(style_id)
+            if val is not None:
+                return val == "yellow"
+        return self._default_highlight == "yellow"
 
     def paragraphs(self) -> list[Paragraph]:
         result = []
+        p_tag = f"{{{W}}}p"
+        r_tag = f"{{{W}}}r"
+        t_tag = f"{{{W}}}t"
+        txbx_tag = f"{{{W}}}txbxContent"
+        boundary_tags = {f"{{{W}}}{tag}" for tag in (
+            "tab", "br", "cr", "drawing", "pict", "object",
+            "fldChar", "instrText", "delText", "sym", "noBreakHyphen",
+            "softHyphen", "footnoteReference", "endnoteReference",
+        )}
         for name, root in self.roots.items():
             if not STORY.fullmatch(name):
                 continue
-            for number, paragraph in enumerate(root.iter(f"{{{W}}}p")):
+            for number, paragraph in enumerate(root.iter(p_tag)):
                 # 文本框独立审查，修订等仍作为风险提示且参与残留扫描。
-                if any(a.tag == f"{{{W}}}txbxContent" for a in paragraph.iterancestors()):
+                if any(a.tag == txbx_tag for a in paragraph.iterancestors()):
                     continue
+                p_iter = paragraph.iter(p_tag)
+                next(p_iter, None)
+                has_nested_p = next(p_iter, None) is not None
                 chunks, spans, position = [], [], 0
                 for node in paragraph.iter():
-                    nearest_p = next((a for a in node.iterancestors()
-                                      if a.tag == f"{{{W}}}p"), None)
-                    if nearest_p is not paragraph:
-                        continue
-                    if node.tag == f"{{{W}}}t" and node.getparent().tag == f"{{{W}}}r":
+                    if has_nested_p and node is not paragraph:
+                        nearest_p = next((a for a in node.iterancestors() if a.tag == p_tag), None)
+                        if nearest_p is not paragraph:
+                            continue
+                    if node.tag == t_tag and node.getparent().tag == r_tag:
                         text = node.text or ""
                         spans.append(Span(position, position + len(text), node,
                                           self.yellow(node, paragraph)))
-                    elif node.tag in {f"{{{W}}}{tag}" for tag in
-                                      ("tab", "br", "cr", "drawing", "pict", "object",
-                                       "fldChar", "instrText", "delText", "sym", "noBreakHyphen",
-                                       "softHyphen", "footnoteReference", "endnoteReference") }:
+                    elif node.tag in boundary_tags:
                         text = "\ufffc"  # 结构边界，绝不跨越替换
                     else:
                         continue
@@ -350,10 +389,13 @@ class Package:
             if not (STORY.fullmatch(name) or name in {
                 "[Content_Types].xml", "word/styles.xml", "word/stylesWithEffects.xml",
                 "word/settings.xml", "word/fontTable.xml", "word/numbering.xml",
-                "word/webSettings.xml", "docProps/core.xml", "docProps/app.xml", "docProps/custom.xml"
+                "word/webSettings.xml", "word/people.xml", "docProps/core.xml",
+                "docProps/app.xml", "docProps/custom.xml"
             } or name.endswith(".rels") or name.startswith(("word/theme/", "customXml/"))):
                 issues.append(Issue("OTHER_XML", "存在非主要文档 XML，需人工审查其中内容。", name))
         for name in self.parts:
+            if name.startswith("word/printerSettings/"):
+                continue
             if name.startswith(("word/media/", "word/embeddings/", "word/fonts/")):
                 issues.append(Issue("BINARY", "存在图片、嵌入对象或嵌入字体，无法检查其中的文字。", name))
             elif name not in self.roots and not name.startswith("docProps/"):
@@ -366,14 +408,17 @@ class Package:
 
     def scrub(self) -> None:
         removed = {name for name in self.parts
-                   if name.startswith(("docProps/", "customXml/"))}
+                   if name.startswith(("docProps/", "customXml/", "word/printerSettings/"))
+                   or name == "word/people.xml"}
         for name, root in self.roots.items():
             if name.endswith(".rels"):
                 for rel in list(root):
                     kind = rel.get("Type", "")
                     deleted_target = (rel.get("TargetMode") != "External"
                                       and _relationship_target(name, rel.get("Target", "")) in removed)
-                    if deleted_target or any(part in kind for part in ("metadata/", "/extended-properties", "/custom-properties", "/customXml", "/thumbnail")):
+                    if deleted_target or any(part in kind for part in (
+                            "metadata/", "/extended-properties", "/custom-properties",
+                            "/customXml", "/thumbnail", "/printerSettings", "/people")):
                         root.remove(rel)
             if name == "[Content_Types].xml":
                 for item in list(root):
@@ -383,12 +428,17 @@ class Package:
                 if not isinstance(element.tag, str):
                     continue
                 local = etree.QName(element).localname
-                if local in {"docVars", "rsids", "rsid", "docId", "dataBinding"}:
+                if local in {"docVars", "rsids", "rsid", "docId", "dataBinding", "printerSettings"}:
                     parent = element.getparent()
                     if parent is not None:
                         parent.remove(element)
                 for attr in list(element.attrib):
-                    if etree.QName(attr).localname.startswith("rsid"):
+                    qattr = etree.QName(attr)
+                    if qattr.localname.startswith("rsid"):
+                        del element.attrib[attr]
+                    elif qattr.namespace in {W, None} and qattr.localname == "author":
+                        element.attrib[attr] = ""
+                    elif qattr.namespace in {W, None} and qattr.localname in {"initials", "date"}:
                         del element.attrib[attr]
         for name in removed:
             self.parts.pop(name, None)
@@ -418,15 +468,16 @@ def term_matches(text: str, terms: list[str]):
 
 def analyze(data: bytes) -> Analysis:
     package = Package(data)
+    paragraphs = package.paragraphs()
     occurrences, groups = [], {}
-    for paragraph in package.paragraphs():
+    for paragraph in paragraphs:
         active: list[Span] = []
         def finish():
             if not active:
                 return
             start, end = active[0].start, active[-1].end
             text = paragraph.text[start:end]
-            if text:
+            if text.strip():
                 group = groups.setdefault(text, f"E{len(groups) + 1:03d}")
                 occurrences.append(Occurrence(paragraph.part, paragraph.number, start, end, text, group))
             active.clear()
@@ -439,7 +490,7 @@ def analyze(data: bytes) -> Analysis:
                 active.append(span)
         finish()
     result = Analysis(package, occurrences, package.issues(), sha256(data).hexdigest())
-    if any(TOKEN.search(p.text) or _malformed(p.text) for p in package.paragraphs()):
+    if any(TOKEN.search(p.text) or _malformed(p.text) for p in paragraphs):
         result.issues.append(Issue("TOKEN_COLLISION", "源文档已含 SECRET 标记，请先处理以避免占位符冲突。", blocking=True))
     result.refresh_unmarked()
     return result
@@ -630,6 +681,23 @@ def _structural_attribute(part: str, node: etree._Element, attr: str, value: str
     return False
 
 
+def _xml_text_blocks(root: etree._Element) -> str:
+    chunks: list[str] = []
+    boundary_tags = {f"{{{W}}}p", f"{{{W}}}tc", f"{{{W}}}tr", f"{{{W}}}br", f"{{{W}}}cr", f"{{{W}}}tab"}
+    for event, node in etree.iterwalk(root, events=("start", "end")):
+        if event == "start":
+            if node.tag in boundary_tags:
+                chunks.append("\ufffc")
+            if node.text:
+                chunks.append(node.text)
+        else:
+            if node.tag in boundary_tags:
+                chunks.append("\ufffc")
+            if node.tail:
+                chunks.append(node.tail)
+    return "".join(chunks)
+
+
 def residual_parts(package: Package, terms: list[str]) -> list[str]:
     """按内容语义检查 XML，避免把命名空间、标签名和格式数字误当原文。"""
     found = set()
@@ -637,7 +705,7 @@ def residual_parts(package: Package, terms: list[str]) -> list[str]:
         haystacks = [] if _standard_part(name) else [name]
         root = package.roots.get(name)
         if root is not None:
-            haystacks.append("".join(root.itertext()))
+            haystacks.append(_xml_text_blocks(root))
             haystacks.extend(value for node in root.iter() if isinstance(node.tag, str)
                              for attr, value in node.attrib.items()
                              if not _structural_attribute(name, node, attr, value))
@@ -703,7 +771,7 @@ def redact(analysis: Analysis, password: str, *, acknowledged: bool = False,
     package.scrub()
     scan_package.scrub()
     # 除用户逐位置确认的保留项外，已知正文和非结构属性残留仍为硬性阻止。
-    terms = sorted({o.text for o in selected}, key=len, reverse=True)
+    terms = sorted({t for o in selected for t in (o.text, o.text.strip()) if t.strip()}, key=len, reverse=True)
     residue = residual_parts(scan_package, terms)
     if residue:
         raise SafetyError("检测到已标记文字仍残留在 DOCX 内部，已阻止导出。请处理未标记位置、隐藏内容或内部属性。涉及部件数 " + str(len(residue)))
@@ -743,9 +811,15 @@ def _malformed(text: str) -> list[dict]:
     # 等长遮蔽保留原始字符偏移。普通英文 SECRET/secretary 不属于占位符。
     remainder = TOKEN.sub(lambda m: " " * len(m.group()), text)
     gap = r"[\s\ufffc\u200b-\u200f\ufeff]*"
+    tight_gap = r"[\ufffc\u200b-\u200f\ufeff]*"
     separated_secret = gap.join("SECRET")
-    identifier = separated_secret + gap + r"(?:[_＿]" + gap + r"[0-9０-９]+|[0-9０-９]{2,})"
-    typo = r"[【\[]\s*SE(?!CRET)[A-Z\s]{2,10}[_\s]*\d+"
+    identifier = (
+        separated_secret
+        + r"(?:" + gap + r"[_＿]" + gap + r"[0-9０-９]+"
+        + r"|" + tight_gap + r"[0-9０-９]{2,}"
+        + r"|" + gap + r"[0-9０-９]{2,}" + gap + r"[】\]])"
+    )
+    typo = r"[【\[]\s*SE(?!CRET)[A-Z\s]{2,10}[_＿]\s*[0-9０-９]+\s*[】\]]?"
     no_number = r"[【\[]\s*" + separated_secret + gap + r"[_＿]?" + gap + r"[】\]]"
     pattern = re.compile(identifier + "|" + typo + "|" + no_number, re.I)
     return [{"offset": m.start(), "kind": "疑似被改写或拆开的占位符"}
@@ -830,10 +904,14 @@ def export_redacted(source: Path, output: Path, mapping: Path, report_path: Path
 
 
 def export_restored(source: Path, mapping: Path, output: Path, report_path: Path,
-                    password: str, report_language: str = "zh", **options) -> dict:
+                    password: str, report_language: str = "zh",
+                    expected_source_hash: str | None = None, **options) -> dict:
     if output.resolve() == report_path.resolve():
         raise OutputError("文档与报告的输出路径必须不同。")
-    result, report = restore(source.read_bytes(), mapping.read_bytes(), password, **options)
+    source_bytes = source.read_bytes()
+    if expected_source_hash is not None and sha256(source_bytes).hexdigest() != expected_source_hash:
+        raise SafetyError("源文件已发生变化，请重新导入并确认预览。")
+    result, report = restore(source_bytes, mapping.read_bytes(), password, **options)
     from .i18n import localized_report
     write_outputs({output: result,
                    report_path: report_bytes(localized_report(report, report_language))}, (source, mapping))
