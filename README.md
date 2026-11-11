@@ -292,7 +292,13 @@ scripts/dev.sh build
 scripts/dev.sh paths
 ```
 
-The build command runs the complete test suite, builds the application in the external development directory, applies an ad-hoc signature, and verifies that signature. The source checkout remains unchanged.
+The build command first checks that installed native extensions do not link external dynamic libraries such as Homebrew OpenSSL. It then runs the complete test suite, builds the application in the external development directory, applies an ad-hoc signature, verifies that signature, and runs the packaged executable in a self-test mode (`WORDSHIELD_SELF_TEST=1`) that imports every dependency and performs an in-memory encryption round trip without opening the interface or writing files. The source checkout remains unchanged.
+
+On Intel Macs, recent `cryptography` releases may not provide a prebuilt wheel. If pip compiles it from source, it links Homebrew OpenSSL, and PyInstaller replaces that library with the older, identically named OpenSSL bundled with python.org Python, so the packaged application fails at startup. `scripts/dev.sh setup` therefore prefers binary wheels, and the build stops early if a source-built extension is detected. To repair an existing environment, install an official wheel, for example:
+
+```sh
+"$(scripts/dev.sh paths | sed -n 's/^开发环境与构建目录 //p')/venv/bin/python" -m pip install --only-binary=:all: --force-reinstall "cryptography>=43,<51"
+```
 
 The project currently does not produce a ZIP archive automatically. The complete application is located under the external development directory's `dist/WordShield.app`.
 
@@ -321,7 +327,7 @@ Finder, IDEs, Git clients, antivirus tools, Microsoft Word, backup tools, and sy
 
 ## Test and verify
 
-The current suite contains 152 automated tests covering highlight extraction, cross-run replacement, tables, headers, footers, footnotes, style inheritance, modern Word identifiers and formatting, metadata relationships, group renaming, residual scanning, encryption, malformed placeholders, output rollback, unsupported structures, bilingual UI behavior, clean-directory behavior, and GUI workflows.
+The current suite contains 158 automated tests covering highlight extraction, cross-run replacement, tables, headers, footers, footnotes, style inheritance, modern Word identifiers and formatting, metadata relationships, group renaming, residual scanning, encryption, malformed placeholders, output rollback, unsupported structures, bilingual UI behavior, clean-directory behavior, and GUI workflows.
 
 The latest verified build and startup check confirmed:
 

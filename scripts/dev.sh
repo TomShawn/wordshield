@@ -19,7 +19,8 @@ if [[ "$ACTION" == "setup" ]]; then
   mkdir -p "$DEV_DIR"
   "$BASE_PYTHON" -B -m venv "$DEV_DIR/venv"
   DEPENDENCIES=("${(@f)$($BASE_PYTHON -B -c 'import tomllib; from pathlib import Path; p=tomllib.loads(Path("pyproject.toml").read_text())["project"]; print("\n".join(p["dependencies"] + p["optional-dependencies"]["dev"]))')}")
-  "$VENV_PYTHON" -B -m pip install "${DEPENDENCIES[@]}"
+  # 优先使用官方二进制 wheel。源码编译的扩展可能链接 Homebrew 动态库，导致打包后的应用无法启动。
+  "$VENV_PYTHON" -B -m pip install --prefer-binary "${DEPENDENCIES[@]}"
   print "开发依赖已安装到 $DEV_DIR/venv"
   exit 0
 fi
